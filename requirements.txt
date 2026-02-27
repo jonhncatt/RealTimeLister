@@ -1,0 +1,6 @@
+faster-whisper>=1.0.3
+numpy>=1.26.0
+openai>=1.60.0
+python-dotenv>=1.0.1
+sounddevice>=0.4.7
+webrtcvad-wheels>=2.0.14
