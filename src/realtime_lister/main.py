@@ -95,18 +95,19 @@ class TranslatorClient:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.enabled = bool(settings.api_key)
+        self._use_responses_api = settings.use_responses_api
         if not self.enabled:
             self.client = None
             return
+
+        if settings.ca_cert_path:
+            os.environ.setdefault("SSL_CERT_FILE", settings.ca_cert_path)
+            os.environ.setdefault("REQUESTS_CA_BUNDLE", settings.ca_cert_path)
 
         kwargs: dict[str, object] = {"api_key": settings.api_key}
         if settings.base_url:
             kwargs["base_url"] = settings.base_url
         self.client = OpenAI(**kwargs)
-
-        if settings.ca_cert_path:
-            os.environ.setdefault("SSL_CERT_FILE", settings.ca_cert_path)
-            os.environ.setdefault("REQUESTS_CA_BUNDLE", settings.ca_cert_path)
 
     def translate(self, text: str) -> str:
         if not text.strip() or not self.enabled or self.client is None:
@@ -121,18 +122,39 @@ class TranslatorClient:
         if self.settings.glossary:
             system_prompt += f" Apply this glossary strictly when relevant:\n{self.settings.glossary}"
 
-        if self.settings.use_responses_api:
-            response = self.client.responses.create(
-                model=self.settings.translation_model,
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": text},
-                ],
-                temperature=0,
-            )
-            translated = (response.output_text or "").strip()
+        try:
+            if self._use_responses_api:
+                translated = self._translate_with_responses(system_prompt, text)
+            else:
+                translated = self._translate_with_chat(system_prompt, text)
             return translated or text
+        except Exception as exc:
+            if self._is_method_not_allowed(exc):
+                fallback = not self._use_responses_api
+                print(
+                    f"[translator] 405 detected, retry with use_responses_api={str(fallback).lower()}",
+                    file=sys.stderr,
+                )
+                self._use_responses_api = fallback
+                if self._use_responses_api:
+                    translated = self._translate_with_responses(system_prompt, text)
+                else:
+                    translated = self._translate_with_chat(system_prompt, text)
+                return translated or text
+            raise
 
+    def _translate_with_responses(self, system_prompt: str, text: str) -> str:
+        response = self.client.responses.create(
+            model=self.settings.translation_model,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text},
+            ],
+            temperature=0,
+        )
+        return (response.output_text or "").strip()
+
+    def _translate_with_chat(self, system_prompt: str, text: str) -> str:
         completion = self.client.chat.completions.create(
             model=self.settings.translation_model,
             messages=[
@@ -142,8 +164,12 @@ class TranslatorClient:
             temperature=0,
         )
         message = completion.choices[0].message.content
-        translated = (message or "").strip()
-        return translated or text
+        return (message or "").strip()
+
+    @staticmethod
+    def _is_method_not_allowed(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "405" in text or "method not allowed" in text
 
 
 class Segmenter:

@@ -39,6 +39,8 @@ OFFICETOOL_CA_CERT_PATH=C:/path/to/company-root-ca.pem
 OFFICETOOL_USE_RESPONSES_API=false
 ```
 
+说明：程序会优先按 `OFFICETOOL_USE_RESPONSES_API` 调用；如果网关返回 `405`，会自动切换 `responses/chat-completions` 方式重试。
+
 ## 3. 运行
 
 ```powershell
