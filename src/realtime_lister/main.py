@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import queue
 import signal
@@ -8,10 +9,13 @@ import sys
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Callable, Iterable
 from urllib.parse import urlparse, urlunparse
+import webbrowser
 
 import numpy as np
 import sounddevice as sd
@@ -25,6 +29,7 @@ SAMPLE_RATE = 16000
 FRAME_MS = 30
 FRAME_SAMPLES = int(SAMPLE_RATE * FRAME_MS / 1000)
 FRAME_BYTES = FRAME_SAMPLES * 2
+STATIC_DIR = Path(__file__).with_name("static")
 
 
 def _env(*keys: str, default: str = "") -> str:
@@ -104,6 +109,16 @@ class Settings:
             hf_endpoint=_env("RT_ASR_HF_ENDPOINT", "RT_HF_ENDPOINT", "HF_ENDPOINT") or None,
             hf_token=_env("RT_ASR_HF_TOKEN", "RT_HF_TOKEN", "HF_TOKEN") or None,
         )
+
+
+@dataclass(slots=True)
+class TranscriptEntry:
+    timestamp: str
+    source_text: str
+    translated_text: str
+    translate_ms: int
+    source_language: str
+    target_language: str
 
 
 def _configure_network_env(settings: Settings) -> None:
@@ -269,8 +284,18 @@ class Segmenter:
 
 
 class RealtimeMeetingTranslator:
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        on_result: Callable[[TranscriptEntry], None] | None = None,
+        on_info: Callable[[str], None] | None = None,
+        console_output: bool = True,
+    ):
         self.settings = settings
+        self.on_result = on_result
+        self.on_info = on_info
+        self.console_output = console_output
         _configure_network_env(settings)
         model_source = _resolve_asr_model_source(settings)
         try:
@@ -328,11 +353,22 @@ class RealtimeMeetingTranslator:
         spent_ms = int((time.perf_counter() - started) * 1000)
 
         now = time.strftime("%H:%M:%S")
-        print(f"\n[{now}] {self.settings.source_language}> {source_text}")
-        print(f"[{now}] {self.settings.target_language}> {translated} (translate {spent_ms} ms)")
+        entry = TranscriptEntry(
+            timestamp=now,
+            source_text=source_text,
+            translated_text=translated,
+            translate_ms=spent_ms,
+            source_language=self.settings.source_language,
+            target_language=self.settings.target_language,
+        )
+        if self.console_output:
+            print(f"\n[{entry.timestamp}] {entry.source_language}> {entry.source_text}")
+            print(f"[{entry.timestamp}] {entry.target_language}> {entry.translated_text} (translate {entry.translate_ms} ms)")
+        if self.on_result:
+            self.on_result(entry)
 
     def run(self) -> None:
-        print(
+        startup_message = (
             "Realtime Meeting Translator started.\n"
             f"- ASR model: {_resolve_asr_model_source(self.settings)}\n"
             f"- ASR beam size: {self.settings.asr_beam_size}\n"
@@ -340,8 +376,19 @@ class RealtimeMeetingTranslator:
             f"- Translation model: {self.settings.translation_model}\n"
             "Press Ctrl+C to stop.\n"
         )
+        if self.console_output:
+            print(startup_message)
+        if self.on_info:
+            self.on_info(
+                f"ASR ready: {_resolve_asr_model_source(self.settings)} | "
+                f"{self.settings.source_language}->{self.settings.target_language}"
+            )
         if not self.translator.enabled:
-            print("OPENAI_API_KEY not set. Running ASR-only mode.\n")
+            message = "OPENAI_API_KEY not set. Running ASR-only mode."
+            if self.console_output:
+                print(f"{message}\n")
+            if self.on_info:
+                self.on_info(message)
 
         with sd.RawInputStream(
             samplerate=SAMPLE_RATE,
@@ -372,12 +419,329 @@ class RealtimeMeetingTranslator:
             pass
 
 
+class EventBus:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._subscribers: set[queue.Queue[dict[str, Any]]] = set()
+
+    def subscribe(self) -> "queue.Queue[dict[str, Any]]":
+        subscriber: "queue.Queue[dict[str, Any]]" = queue.Queue(maxsize=200)
+        with self._lock:
+            self._subscribers.add(subscriber)
+        return subscriber
+
+    def unsubscribe(self, subscriber: "queue.Queue[dict[str, Any]]") -> None:
+        with self._lock:
+            self._subscribers.discard(subscriber)
+
+    def publish(self, event: dict[str, Any]) -> None:
+        with self._lock:
+            subscribers = list(self._subscribers)
+        for subscriber in subscribers:
+            try:
+                subscriber.put_nowait(event)
+            except queue.Full:
+                try:
+                    subscriber.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    subscriber.put_nowait(event)
+                except queue.Full:
+                    pass
+
+
+class WebAppState:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.event_bus = EventBus()
+        self._lock = threading.Lock()
+        self._history: deque[TranscriptEntry] = deque(maxlen=120)
+        self._runner: RealtimeMeetingTranslator | None = None
+        self._thread: threading.Thread | None = None
+        self._running = False
+        self._loading = False
+        self._status_level = "idle"
+        self._status_message = "Ready to start"
+        self._last_info = ""
+        self._last_error = ""
+        self._stop_requested = False
+
+    def subscribe(self) -> "queue.Queue[dict[str, Any]]":
+        return self.event_bus.subscribe()
+
+    def unsubscribe(self, subscriber: "queue.Queue[dict[str, Any]]") -> None:
+        self.event_bus.unsubscribe(subscriber)
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            current = asdict(self._history[-1]) if self._history else None
+            asr_source = self.settings.asr_model_path or self.settings.asr_model
+            return {
+                "running": self._running,
+                "loading": self._loading,
+                "statusLevel": self._status_level,
+                "statusMessage": self._status_message,
+                "lastInfo": self._last_info,
+                "lastError": self._last_error,
+                "sourceLanguage": self.settings.source_language,
+                "targetLanguage": self.settings.target_language,
+                "translationModel": self.settings.translation_model,
+                "translatorEnabled": bool(self.settings.api_key),
+                "asrModelSource": asr_source,
+                "asrResolutionMode": "directory" if self.settings.asr_model_path else "model_name",
+                "asrBeamSize": self.settings.asr_beam_size,
+                "history": [asdict(item) for item in self._history],
+                "current": current,
+            }
+
+    def _publish(self, event: dict[str, Any]) -> None:
+        self.event_bus.publish(event)
+
+    def _publish_snapshot(self) -> None:
+        self._publish({"type": "snapshot", "state": self.snapshot()})
+
+    def _set_status(self, level: str, message: str) -> None:
+        with self._lock:
+            self._status_level = level
+            self._status_message = message
+            if level == "error":
+                self._last_error = message
+            elif level in {"running", "loading", "stopped", "idle"}:
+                self._last_info = message
+        self._publish({"type": "status", "level": level, "message": message, "timestamp": time.strftime("%H:%M:%S")})
+        self._publish_snapshot()
+
+    def _handle_result(self, entry: TranscriptEntry) -> None:
+        with self._lock:
+            self._history.append(entry)
+        self._publish({"type": "transcript", "item": asdict(entry)})
+        self._publish_snapshot()
+
+    def _handle_info(self, message: str) -> None:
+        with self._lock:
+            self._last_info = message
+        self._publish({"type": "info", "message": message, "timestamp": time.strftime("%H:%M:%S")})
+        self._publish_snapshot()
+
+    def start(self) -> tuple[bool, str]:
+        with self._lock:
+            if self._running or self._loading:
+                return False, "Session is already running."
+            self._loading = True
+            self._stop_requested = False
+            self._status_level = "loading"
+            self._status_message = "Loading ASR model and preparing microphone..."
+            thread = threading.Thread(target=self._run_session, name="realtime-lister-session", daemon=True)
+            self._thread = thread
+        self._publish_snapshot()
+        thread.start()
+        return True, "Session starting."
+
+    def _run_session(self) -> None:
+        try:
+            runner = RealtimeMeetingTranslator(
+                self.settings,
+                on_result=self._handle_result,
+                on_info=self._handle_info,
+                console_output=False,
+            )
+            with self._lock:
+                self._runner = runner
+                self._running = True
+                self._loading = False
+                stop_requested = self._stop_requested
+            if stop_requested:
+                runner.stop()
+                self._set_status("stopped", "Stop requested before microphone opened.")
+            else:
+                self._set_status("running", "Microphone live. Listening for speech...")
+            runner.run()
+            final_level = "stopped" if self._stop_requested else "idle"
+            final_message = "Session stopped." if self._stop_requested else "Session finished."
+            self._set_status(final_level, final_message)
+        except Exception as exc:
+            self._set_status("error", str(exc))
+        finally:
+            with self._lock:
+                self._runner = None
+                self._thread = None
+                self._running = False
+                self._loading = False
+                self._stop_requested = False
+            self._publish_snapshot()
+
+    def stop(self) -> tuple[bool, str]:
+        with self._lock:
+            runner = self._runner
+            loading = self._loading
+            running = self._running
+            self._stop_requested = True
+        if runner is not None:
+            runner.stop()
+            self._set_status("stopped", "Stopping microphone...")
+            return True, "Stop requested."
+        if loading or running:
+            self._set_status("stopped", "Waiting for session to stop...")
+            return True, "Stop requested."
+        return False, "No active session."
+
+    def clear_history(self) -> None:
+        with self._lock:
+            self._history.clear()
+        self._publish({"type": "cleared"})
+        self._publish_snapshot()
+
+
+class RealtimeHTTPServer(ThreadingHTTPServer):
+    def __init__(self, server_address: tuple[str, int], handler_class: type[BaseHTTPRequestHandler], app_state: WebAppState):
+        super().__init__(server_address, handler_class)
+        self.app_state = app_state
+
+
+def _guess_content_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".html":
+        return "text/html; charset=utf-8"
+    if suffix == ".css":
+        return "text/css; charset=utf-8"
+    if suffix == ".js":
+        return "application/javascript; charset=utf-8"
+    return "application/octet-stream"
+
+
+def _make_handler(static_dir: Path) -> type[BaseHTTPRequestHandler]:
+    class RealtimeHandler(BaseHTTPRequestHandler):
+        server: RealtimeHTTPServer
+
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
+            return
+
+        def do_GET(self) -> None:  # noqa: N802
+            path = self.path.split("?", 1)[0]
+            if path == "/":
+                self._serve_static(static_dir / "index.html")
+                return
+            if path in {"/styles.css", "/app.js"}:
+                self._serve_static(static_dir / path.lstrip("/"))
+                return
+            if path == "/api/state":
+                self._send_json(self.server.app_state.snapshot())
+                return
+            if path == "/api/events":
+                self._serve_events()
+                return
+            self.send_error(HTTPStatus.NOT_FOUND)
+
+        def do_POST(self) -> None:  # noqa: N802
+            path = self.path.split("?", 1)[0]
+            if path == "/api/start":
+                ok, message = self.server.app_state.start()
+                self._send_json({"ok": ok, "message": message}, status=HTTPStatus.OK if ok else HTTPStatus.CONFLICT)
+                return
+            if path == "/api/stop":
+                ok, message = self.server.app_state.stop()
+                self._send_json({"ok": ok, "message": message}, status=HTTPStatus.OK if ok else HTTPStatus.CONFLICT)
+                return
+            if path == "/api/clear":
+                self.server.app_state.clear_history()
+                self._send_json({"ok": True, "message": "History cleared."})
+                return
+            self.send_error(HTTPStatus.NOT_FOUND)
+
+        def _serve_static(self, file_path: Path) -> None:
+            if not file_path.exists():
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            payload = file_path.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", _guess_content_type(file_path))
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _serve_events(self) -> None:
+            subscriber = self.server.app_state.subscribe()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            try:
+                self.wfile.write(b"retry: 1000\n")
+                self._write_event({"type": "snapshot", "state": self.server.app_state.snapshot()})
+                while True:
+                    try:
+                        event = subscriber.get(timeout=12)
+                        self._write_event(event)
+                    except queue.Empty:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            finally:
+                self.server.app_state.unsubscribe(subscriber)
+
+        def _write_event(self, payload: dict[str, Any]) -> None:
+            data = json.dumps(payload, ensure_ascii=False)
+            self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+    return RealtimeHandler
+
+
+def run_web_interface(settings: Settings, host: str, port: int, open_browser: bool) -> int:
+    app_state = WebAppState(settings)
+    handler_class = _make_handler(STATIC_DIR)
+    server = RealtimeHTTPServer((host, port), handler_class, app_state)
+    browser_host = "127.0.0.1" if host == "0.0.0.0" else host
+    url = f"http://{browser_host}:{port}"
+    print(
+        "Realtime Meeting Translator Web UI\n"
+        f"- URL: {url}\n"
+        f"- ASR source: {settings.asr_model_path or settings.asr_model}\n"
+        f"- Translation model: {settings.translation_model}\n"
+        "Use the browser controls to start or stop listening.\n"
+    )
+    if open_browser:
+        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+
+    def _handle_signal(signum, frame):  # noqa: ANN001
+        _ = (signum, frame)
+        app_state.stop()
+        server.shutdown()
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        app_state.stop()
+        server.server_close()
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Realtime meeting speech translation (local ASR + LLM translation)")
     parser.add_argument("--source-language", default=None, help="ASR source language, e.g. zh, en")
     parser.add_argument("--target-language", default=None, help="Target translation language, e.g. en, zh")
     parser.add_argument("--asr-model", default=None, help="faster-whisper model name, e.g. small, medium")
     parser.add_argument("--translation-model", default=None, help="LLM model for translation, e.g. gpt-5.1")
+    parser.add_argument("--terminal", action="store_true", help="Run in terminal mode instead of the local web UI")
+    parser.add_argument("--host", default="127.0.0.1", help="Host for the local web UI, default 127.0.0.1")
+    parser.add_argument("--port", type=int, default=8080, help="Port for the local web UI, default 8080")
+    parser.add_argument("--no-browser", action="store_true", help="Do not open a browser automatically in web mode")
     return parser.parse_args()
 
 
@@ -392,6 +756,9 @@ def main() -> int:
         settings.asr_model = args.asr_model
     if args.translation_model:
         settings.translation_model = args.translation_model
+
+    if not args.terminal:
+        return run_web_interface(settings, args.host, args.port, open_browser=not args.no_browser)
 
     runner = RealtimeMeetingTranslator(settings)
 

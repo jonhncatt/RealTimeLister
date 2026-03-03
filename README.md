@@ -151,14 +151,35 @@ RT_ASR_HF_LOCAL_ONLY=true
 
 ## 3. 运行
 
+默认会启动本地网页字幕页，并自动打开浏览器。
+
 ```powershell
 python -m realtime_lister.main
+```
+
+默认地址：
+
+```text
+http://127.0.0.1:8080
+```
+
+界面包含：
+
+- 中央大字幕区：主显示译文，原文放在上方
+- 状态条：显示当前运行状态
+- Session 面板：显示当前 ASR 来源、beam size、翻译模型
+- History 面板：显示最近识别记录
+
+如果你还想保留旧的终端输出模式：
+
+```powershell
+python -m realtime_lister.main --terminal
 ```
 
 可选参数：
 
 ```powershell
-python -m realtime_lister.main --source-language zh --target-language en --asr-model small --translation-model gpt-5.1
+python -m realtime_lister.main --source-language zh --target-language en --asr-model small --translation-model gpt-5.1 --host 127.0.0.1 --port 8080
 ```
 
 ## 4. 精度与延迟建议
@@ -176,3 +197,4 @@ python -m realtime_lister.main --source-language zh --target-language en --asr-m
 2. 如果翻译接口报 401/403，检查 `OPENAI_API_KEY` 与公司网关权限。
 3. 如果延迟较高，先确认 `RT_ASR_MODEL_NAME=small` 且 `RT_ASR_BEAM_SIZE=1`。
 4. 如果报 Hugging Face 下载失败，优先改用 `RT_ASR_MODEL_DIR` 或 `RT_ASR_HF_LOCAL_ONLY=true`。
+5. 如果浏览器没有自动打开，手动访问 `http://127.0.0.1:8080`。
