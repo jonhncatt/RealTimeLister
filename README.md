@@ -41,7 +41,7 @@ OPENAI_API_KEY=your_key
 RT_TRANSLATION_MODEL=gpt-5.1
 RT_SOURCE_LANGUAGE=zh
 RT_TARGET_LANGUAGE=en
-RT_WHISPER_MODEL=small
+RT_ASR_MODEL_NAME=small
 ```
 
 如果走公司网关，再配置：
@@ -54,16 +54,31 @@ OFFICETOOL_USE_RESPONSES_API=false
 
 说明：程序会优先按 `OFFICETOOL_USE_RESPONSES_API` 调用；如果网关返回 `405`，会自动切换 `responses/chat-completions` 方式重试。
 
-## 2.1 Hugging Face / 本地模型说明
+## 2.1 ASR 模型规则
 
-默认情况下，`faster-whisper` 会按 `RT_WHISPER_MODEL` 从 Hugging Face 拉取模型。
+ASR 模型加载优先级如下：
+
+1. 如果配置了 `RT_ASR_MODEL_DIR`，优先使用这个本地目录
+2. 如果没有配置 `RT_ASR_MODEL_DIR`，则读取 `RT_ASR_MODEL_NAME`
+3. 如果本地缓存里没有 `RT_ASR_MODEL_NAME` 对应模型，`faster-whisper` 会尝试从 Hugging Face 下载
+
+注意：
+
+- 下载完成后，程序不会自动把 `.env` 改写成 `RT_ASR_MODEL_DIR=...`
+- 如果你后续仍然只配置 `RT_ASR_MODEL_NAME=small`，程序会继续按“型号名 + 本地缓存”方式工作
+- 如果你希望完全固定使用某个本地目录，仍然应该手动配置 `RT_ASR_MODEL_DIR`
+- 旧变量名仍兼容，例如 `RT_WHISPER_MODEL`、`RT_WHISPER_MODEL_PATH`
+
+## 2.2 Hugging Face / 本地模型说明
+
+默认情况下，`faster-whisper` 会按 `RT_ASR_MODEL_NAME` 从 Hugging Face 拉取模型。
 
 如果公司网络不能访问 Hugging Face，优先用这两种方式：
 
 1. 直接指定本地模型目录
 
 ```env
-RT_WHISPER_MODEL_PATH=C:/models/faster-whisper-small
+RT_ASR_MODEL_DIR=C:/models/faster-whisper-small
 ```
 
 注意：这里必须是 `faster-whisper/CTranslate2` 转换后的模型目录，不是原始 Whisper 的 PyTorch 权重目录。
@@ -71,14 +86,14 @@ RT_WHISPER_MODEL_PATH=C:/models/faster-whisper-small
 2. 只使用本地缓存，不允许联网下载
 
 ```env
-RT_HF_CACHE_DIR=C:/hf-cache
-RT_HF_LOCAL_FILES_ONLY=true
+RT_ASR_HF_CACHE_DIR=C:/hf-cache
+RT_ASR_HF_LOCAL_ONLY=true
 ```
 
 如果公司内部有 Hugging Face 镜像，也可以配置：
 
 ```env
-RT_HF_ENDPOINT=https://your-hf-mirror
+RT_ASR_HF_ENDPOINT=https://your-hf-mirror
 ```
 
 如果公司代理需要自签 CA，请配置：
@@ -89,7 +104,7 @@ OFFICETOOL_CA_CERT_PATH=C:/path/to/company-root-ca.pem
 
 这项配置现在会同时用于公司 LLM 网关和 Hugging Face 模型下载。
 
-## 2.2 不能访问 Hugging Face 时，如何在外网机器下载
+## 2.3 不能访问 Hugging Face 时，如何在外网机器下载
 
 仓库里加了一个下载脚本：
 
@@ -122,8 +137,8 @@ C:/models/faster-whisper-small
 然后公司机器的 `.env` 配成：
 
 ```env
-RT_WHISPER_MODEL_PATH=C:/models/faster-whisper-small
-RT_HF_LOCAL_FILES_ONLY=true
+RT_ASR_MODEL_DIR=C:/models/faster-whisper-small
+RT_ASR_HF_LOCAL_ONLY=true
 ```
 
 目录里至少应该有这些文件：
@@ -148,16 +163,16 @@ python -m realtime_lister.main --source-language zh --target-language en --asr-m
 
 ## 4. 精度与延迟建议
 
-- 默认快速档：`RT_WHISPER_MODEL=small`
-- 精度优先：`RT_WHISPER_MODEL=medium`
-- 更快但更容易掉字：`RT_WHISPER_MODEL=tiny`
-- CPU 机器建议：`RT_COMPUTE_TYPE=int8`
-- 低延迟建议：`RT_BEAM_SIZE=1`
+- 默认快速档：`RT_ASR_MODEL_NAME=small`
+- 精度优先：`RT_ASR_MODEL_NAME=medium`
+- 更快但更容易掉字：`RT_ASR_MODEL_NAME=tiny`
+- CPU 机器建议：`RT_ASR_COMPUTE_TYPE=int8`
+- 低延迟建议：`RT_ASR_BEAM_SIZE=1`
 - 开场前准备术语表：`RT_GLOSSARY=术语A=Term A\n术语B=Term B`
 
 ## 5. 常见问题
 
 1. 如果出现麦克风权限问题，请在 Windows 隐私设置中允许终端访问麦克风。
 2. 如果翻译接口报 401/403，检查 `OPENAI_API_KEY` 与公司网关权限。
-3. 如果延迟较高，先确认 `RT_WHISPER_MODEL=small` 且 `RT_BEAM_SIZE=1`。
-4. 如果报 Hugging Face 下载失败，优先改用 `RT_WHISPER_MODEL_PATH` 或 `RT_HF_LOCAL_FILES_ONLY=true`。
+3. 如果延迟较高，先确认 `RT_ASR_MODEL_NAME=small` 且 `RT_ASR_BEAM_SIZE=1`。
+4. 如果报 Hugging Face 下载失败，优先改用 `RT_ASR_MODEL_DIR` 或 `RT_ASR_HF_LOCAL_ONLY=true`。

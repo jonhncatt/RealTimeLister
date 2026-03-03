@@ -81,16 +81,16 @@ class Settings:
         load_dotenv()
         base_url = _env("OFFICETOOL_OPENAI_BASE_URL", "OFFCIATOOL_OPENAI_BASE_URL", "OPENAI_BASE_URL")
         ca_cert = _env("OFFICETOOL_CA_CERT_PATH", "OFFCIATOOL_CA_CERT_PATH", "SSL_CERT_FILE")
-        asr_model_path = _env("RT_WHISPER_MODEL_PATH")
-        asr_download_root = _env("RT_HF_CACHE_DIR")
+        asr_model_path = _env("RT_ASR_MODEL_DIR", "RT_WHISPER_MODEL_PATH")
+        asr_download_root = _env("RT_ASR_HF_CACHE_DIR", "RT_HF_CACHE_DIR")
         return cls(
-            asr_model=_env("RT_WHISPER_MODEL", default="small"),
+            asr_model=_env("RT_ASR_MODEL_NAME", "RT_WHISPER_MODEL", default="small"),
             asr_model_path=str(Path(asr_model_path).expanduser()) if asr_model_path else None,
             asr_download_root=str(Path(asr_download_root).expanduser()) if asr_download_root else None,
-            asr_local_files_only=_truthy(_env("RT_HF_LOCAL_FILES_ONLY", default="false")),
-            asr_beam_size=max(1, int(_env("RT_BEAM_SIZE", default="1"))),
-            device=_env("RT_DEVICE", default="auto"),
-            compute_type=_env("RT_COMPUTE_TYPE", default="int8"),
+            asr_local_files_only=_truthy(_env("RT_ASR_HF_LOCAL_ONLY", "RT_HF_LOCAL_FILES_ONLY", default="false")),
+            asr_beam_size=max(1, int(_env("RT_ASR_BEAM_SIZE", "RT_BEAM_SIZE", default="1"))),
+            device=_env("RT_ASR_DEVICE", "RT_DEVICE", default="auto"),
+            compute_type=_env("RT_ASR_COMPUTE_TYPE", "RT_COMPUTE_TYPE", default="int8"),
             source_language=_env("RT_SOURCE_LANGUAGE", default="zh"),
             target_language=_env("RT_TARGET_LANGUAGE", default="en"),
             translation_model=_env("RT_TRANSLATION_MODEL", default="gpt-5.1"),
@@ -101,8 +101,8 @@ class Settings:
             vad_aggressiveness=max(0, min(3, int(_env("RT_VAD_AGGRESSIVENESS", default="2")))),
             min_segment_ms=max(300, int(_env("RT_MIN_SEGMENT_MS", default="700"))),
             glossary=_env("RT_GLOSSARY", default=""),
-            hf_endpoint=_env("RT_HF_ENDPOINT", "HF_ENDPOINT") or None,
-            hf_token=_env("RT_HF_TOKEN", "HF_TOKEN") or None,
+            hf_endpoint=_env("RT_ASR_HF_ENDPOINT", "RT_HF_ENDPOINT", "HF_ENDPOINT") or None,
+            hf_token=_env("RT_ASR_HF_TOKEN", "RT_HF_TOKEN", "HF_TOKEN") or None,
         )
 
 
@@ -122,7 +122,7 @@ def _resolve_asr_model_source(settings: Settings) -> str:
         return settings.asr_model
     model_path = Path(settings.asr_model_path).expanduser()
     if not model_path.exists():
-        raise FileNotFoundError(f"RT_WHISPER_MODEL_PATH does not exist: {model_path}")
+        raise FileNotFoundError(f"RT_ASR_MODEL_DIR does not exist: {model_path}")
     return str(model_path)
 
 
@@ -131,16 +131,16 @@ def _build_model_load_error(settings: Settings, model_source: str, exc: Exceptio
         f"Failed to load faster-whisper model: {model_source}",
         f"Original error: {exc}",
         "Hints:",
-        "- If Hugging Face is blocked on your company network, set RT_WHISPER_MODEL_PATH to a local converted model directory.",
-        "- If you need cached/offline mode, set RT_HF_LOCAL_FILES_ONLY=true and RT_HF_CACHE_DIR to your model cache.",
-        "- If you need a mirror, set RT_HF_ENDPOINT.",
+        "- If Hugging Face is blocked on your company network, set RT_ASR_MODEL_DIR to a local converted model directory.",
+        "- If you need cached/offline mode, set RT_ASR_HF_LOCAL_ONLY=true and RT_ASR_HF_CACHE_DIR to your model cache.",
+        "- If you need a mirror, set RT_ASR_HF_ENDPOINT.",
         "- If the company proxy uses a custom CA, set OFFICETOOL_CA_CERT_PATH.",
-        "- RT_WHISPER_MODEL_PATH must point to a faster-whisper/CTranslate2 model directory, not the original OpenAI Whisper PyTorch files.",
+        "- RT_ASR_MODEL_DIR must point to a faster-whisper/CTranslate2 model directory, not the original OpenAI Whisper PyTorch files.",
     ]
     if settings.asr_model_path:
-        details.append(f"- Current RT_WHISPER_MODEL_PATH: {settings.asr_model_path}")
+        details.append(f"- Current RT_ASR_MODEL_DIR: {settings.asr_model_path}")
     if settings.asr_download_root:
-        details.append(f"- Current RT_HF_CACHE_DIR: {settings.asr_download_root}")
+        details.append(f"- Current RT_ASR_HF_CACHE_DIR: {settings.asr_download_root}")
     return RuntimeError("\n".join(details))
 
 

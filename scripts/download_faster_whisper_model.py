@@ -67,7 +67,7 @@ def main() -> int:
     validate_model_dir(output_dir)
 
     print("Download complete.")
-    print(f"Use this on the offline machine with RT_WHISPER_MODEL_PATH={output_dir}")
+    print(f"Use this on the offline machine with RT_ASR_MODEL_DIR={output_dir}")
     return 0
 
 
