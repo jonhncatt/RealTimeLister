@@ -7,9 +7,11 @@ const els = {
   targetText: document.getElementById("target-text"),
   asrMode: document.getElementById("asr-mode"),
   controlNote: document.getElementById("control-note"),
+  inputDeviceSelect: document.getElementById("input-device-select"),
   asrSource: document.getElementById("asr-source"),
   asrBeam: document.getElementById("asr-beam"),
   direction: document.getElementById("direction"),
+  audioInputState: document.getElementById("audio-input-state"),
   translatorState: document.getElementById("translator-state"),
   historyCount: document.getElementById("history-count"),
   historyList: document.getElementById("history-list"),
@@ -60,6 +62,7 @@ function statusClass(level) {
 function applyState(state) {
   currentState = state;
   const current = state.current;
+  const noInputs = Boolean(state.inputDevicesError) || state.inputDevices.length === 0;
   els.statusPill.textContent = state.statusMessage;
   els.statusPill.className = `status-pill ${statusClass(state.statusLevel)}`;
   els.latencyChip.textContent = current ? `${current.translate_ms} ms` : "Waiting";
@@ -68,23 +71,69 @@ function applyState(state) {
   els.asrSource.textContent = state.asrModelSource;
   els.asrBeam.textContent = String(state.asrBeamSize);
   els.direction.textContent = `${state.sourceLanguage} → ${state.targetLanguage}`;
+  els.audioInputState.textContent = state.selectedInputDeviceLabel || state.selectedInputDevice;
   els.translatorState.textContent = state.translatorEnabled ? state.translationModel : "ASR only";
   els.sourceLabel.textContent = `${state.sourceLanguage.toUpperCase()} Source`;
   els.targetLabel.textContent = `${state.targetLanguage.toUpperCase()} Translation`;
   els.sourceText.textContent = current?.source_text || "Start the session to begin showing source speech.";
   els.targetText.textContent = current?.translated_text || "Live translation will appear here.";
   els.historyCount.textContent = `${state.history.length} item${state.history.length === 1 ? "" : "s"}`;
-  els.controlNote.textContent = state.lastError || state.lastInfo || state.statusMessage;
+  els.controlNote.textContent =
+    state.inputDevicesError ||
+    (noInputs ? "No audio input device available." : "") ||
+    state.lastError ||
+    state.lastInfo ||
+    state.statusMessage;
 
-  els.startBtn.disabled = state.running || state.loading;
+  els.startBtn.disabled = state.running || state.loading || noInputs;
   els.stopBtn.disabled = !state.running && !state.loading;
   els.clearBtn.disabled = state.running || state.loading ? false : state.history.length === 0;
+  els.inputDeviceSelect.disabled = state.running || state.loading || noInputs;
+
+  renderInputDevices(state);
 
   renderHistory(state.history);
 }
 
+function renderInputDevices(state) {
+  const options = [
+    `<option value="auto">Auto</option>`,
+    ...state.inputDevices.map(
+      (item) =>
+        `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}${item.isDefault ? " (Default)" : ""}</option>`
+    ),
+  ];
+  const selectedKnown =
+    state.selectedInputDevice === "auto" ||
+    state.inputDevices.some((item) => item.id === state.selectedInputDevice);
+  if (!selectedKnown && state.selectedInputDevice) {
+    options.push(
+      `<option value="${escapeHtml(state.selectedInputDevice)}">${escapeHtml(state.selectedInputDeviceLabel || state.selectedInputDevice)}</option>`
+    );
+  }
+  els.inputDeviceSelect.innerHTML = options.join("");
+  els.inputDeviceSelect.value = state.selectedInputDevice || "auto";
+  if (!state.inputDevices.length) {
+    els.inputDeviceSelect.innerHTML = `<option value="auto">No input device available</option>`;
+    els.inputDeviceSelect.value = "auto";
+  }
+}
+
 async function postAction(path) {
   const response = await fetch(path, { method: "POST" });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.message || "Request failed.");
+  }
+  return payload;
+}
+
+async function postJson(path, body) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   const payload = await response.json();
   if (!response.ok) {
     throw new Error(payload.message || "Request failed.");
@@ -112,6 +161,14 @@ function bindControls() {
   els.clearBtn.addEventListener("click", async () => {
     try {
       await postAction("/api/clear");
+    } catch (error) {
+      els.controlNote.textContent = error.message;
+    }
+  });
+
+  els.inputDeviceSelect.addEventListener("change", async (event) => {
+    try {
+      await postJson("/api/device", { device: event.target.value });
     } catch (error) {
       els.controlNote.textContent = error.message;
     }

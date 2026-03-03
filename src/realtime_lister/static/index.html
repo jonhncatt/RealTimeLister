@@ -36,6 +36,12 @@
           <div class="controls-grid">
             <section class="panel control-panel">
               <div class="section-title">Controls</div>
+              <label class="select-block">
+                <span class="select-label">Audio Input</span>
+                <select id="input-device-select" class="input-select">
+                  <option value="auto">Auto</option>
+                </select>
+              </label>
               <div class="button-row">
                 <button id="start-btn" class="btn primary">Start Listening</button>
                 <button id="stop-btn" class="btn muted">Stop</button>
@@ -58,6 +64,10 @@
                 <div>
                   <dt>Direction</dt>
                   <dd id="direction">-</dd>
+                </div>
+                <div>
+                  <dt>Audio Input</dt>
+                  <dd id="audio-input-state">-</dd>
                 </div>
                 <div>
                   <dt>Translator</dt>
