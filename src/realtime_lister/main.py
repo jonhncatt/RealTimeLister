@@ -9,6 +9,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse, urlunparse
 
@@ -56,6 +57,10 @@ def _truthy(raw: str) -> bool:
 @dataclass(slots=True)
 class Settings:
     asr_model: str
+    asr_model_path: str | None
+    asr_download_root: str | None
+    asr_local_files_only: bool
+    asr_beam_size: int
     device: str
     compute_type: str
     source_language: str
@@ -68,14 +73,22 @@ class Settings:
     vad_aggressiveness: int
     min_segment_ms: int
     glossary: str
+    hf_endpoint: str | None
+    hf_token: str | None
 
     @classmethod
     def load(cls) -> "Settings":
         load_dotenv()
         base_url = _env("OFFICETOOL_OPENAI_BASE_URL", "OFFCIATOOL_OPENAI_BASE_URL", "OPENAI_BASE_URL")
         ca_cert = _env("OFFICETOOL_CA_CERT_PATH", "OFFCIATOOL_CA_CERT_PATH", "SSL_CERT_FILE")
+        asr_model_path = _env("RT_WHISPER_MODEL_PATH")
+        asr_download_root = _env("RT_HF_CACHE_DIR")
         return cls(
-            asr_model=_env("RT_WHISPER_MODEL", default="large-v3"),
+            asr_model=_env("RT_WHISPER_MODEL", default="small"),
+            asr_model_path=str(Path(asr_model_path).expanduser()) if asr_model_path else None,
+            asr_download_root=str(Path(asr_download_root).expanduser()) if asr_download_root else None,
+            asr_local_files_only=_truthy(_env("RT_HF_LOCAL_FILES_ONLY", default="false")),
+            asr_beam_size=max(1, int(_env("RT_BEAM_SIZE", default="1"))),
             device=_env("RT_DEVICE", default="auto"),
             compute_type=_env("RT_COMPUTE_TYPE", default="int8"),
             source_language=_env("RT_SOURCE_LANGUAGE", default="zh"),
@@ -88,7 +101,47 @@ class Settings:
             vad_aggressiveness=max(0, min(3, int(_env("RT_VAD_AGGRESSIVENESS", default="2")))),
             min_segment_ms=max(300, int(_env("RT_MIN_SEGMENT_MS", default="700"))),
             glossary=_env("RT_GLOSSARY", default=""),
+            hf_endpoint=_env("RT_HF_ENDPOINT", "HF_ENDPOINT") or None,
+            hf_token=_env("RT_HF_TOKEN", "HF_TOKEN") or None,
         )
+
+
+def _configure_network_env(settings: Settings) -> None:
+    if settings.ca_cert_path:
+        # Apply corporate CA before any OpenAI/Hugging Face network calls.
+        os.environ.setdefault("SSL_CERT_FILE", settings.ca_cert_path)
+        os.environ.setdefault("REQUESTS_CA_BUNDLE", settings.ca_cert_path)
+    if settings.hf_endpoint:
+        os.environ.setdefault("HF_ENDPOINT", settings.hf_endpoint)
+    if settings.hf_token:
+        os.environ.setdefault("HF_TOKEN", settings.hf_token)
+
+
+def _resolve_asr_model_source(settings: Settings) -> str:
+    if not settings.asr_model_path:
+        return settings.asr_model
+    model_path = Path(settings.asr_model_path).expanduser()
+    if not model_path.exists():
+        raise FileNotFoundError(f"RT_WHISPER_MODEL_PATH does not exist: {model_path}")
+    return str(model_path)
+
+
+def _build_model_load_error(settings: Settings, model_source: str, exc: Exception) -> RuntimeError:
+    details = [
+        f"Failed to load faster-whisper model: {model_source}",
+        f"Original error: {exc}",
+        "Hints:",
+        "- If Hugging Face is blocked on your company network, set RT_WHISPER_MODEL_PATH to a local converted model directory.",
+        "- If you need cached/offline mode, set RT_HF_LOCAL_FILES_ONLY=true and RT_HF_CACHE_DIR to your model cache.",
+        "- If you need a mirror, set RT_HF_ENDPOINT.",
+        "- If the company proxy uses a custom CA, set OFFICETOOL_CA_CERT_PATH.",
+        "- RT_WHISPER_MODEL_PATH must point to a faster-whisper/CTranslate2 model directory, not the original OpenAI Whisper PyTorch files.",
+    ]
+    if settings.asr_model_path:
+        details.append(f"- Current RT_WHISPER_MODEL_PATH: {settings.asr_model_path}")
+    if settings.asr_download_root:
+        details.append(f"- Current RT_HF_CACHE_DIR: {settings.asr_download_root}")
+    return RuntimeError("\n".join(details))
 
 
 class TranslatorClient:
@@ -99,10 +152,6 @@ class TranslatorClient:
         if not self.enabled:
             self.client = None
             return
-
-        if settings.ca_cert_path:
-            os.environ.setdefault("SSL_CERT_FILE", settings.ca_cert_path)
-            os.environ.setdefault("REQUESTS_CA_BUNDLE", settings.ca_cert_path)
 
         kwargs: dict[str, object] = {"api_key": settings.api_key}
         if settings.base_url:
@@ -222,11 +271,19 @@ class Segmenter:
 class RealtimeMeetingTranslator:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.model = WhisperModel(
-            settings.asr_model,
-            device=settings.device,
-            compute_type=settings.compute_type,
-        )
+        _configure_network_env(settings)
+        model_source = _resolve_asr_model_source(settings)
+        try:
+            model_kwargs: dict[str, object] = {
+                "device": settings.device,
+                "compute_type": settings.compute_type,
+                "local_files_only": settings.asr_local_files_only,
+            }
+            if settings.asr_download_root:
+                model_kwargs["download_root"] = settings.asr_download_root
+            self.model = WhisperModel(model_source, **model_kwargs)
+        except Exception as exc:
+            raise _build_model_load_error(settings, model_source, exc) from exc
         self.translator = TranslatorClient(settings)
         self.segmenter = Segmenter(settings.vad_aggressiveness, settings.min_segment_ms)
         self.audio_queue: "queue.Queue[bytes | None]" = queue.Queue(maxsize=1200)
@@ -253,7 +310,7 @@ class RealtimeMeetingTranslator:
         segments, _ = self.model.transcribe(
             pcm,
             language=self.settings.source_language,
-            beam_size=5,
+            beam_size=self.settings.asr_beam_size,
             vad_filter=False,
             word_timestamps=False,
             condition_on_previous_text=True,
@@ -277,7 +334,8 @@ class RealtimeMeetingTranslator:
     def run(self) -> None:
         print(
             "Realtime Meeting Translator started.\n"
-            f"- ASR model: {self.settings.asr_model}\n"
+            f"- ASR model: {_resolve_asr_model_source(self.settings)}\n"
+            f"- ASR beam size: {self.settings.asr_beam_size}\n"
             f"- Source -> Target: {self.settings.source_language} -> {self.settings.target_language}\n"
             f"- Translation model: {self.settings.translation_model}\n"
             "Press Ctrl+C to stop.\n"
@@ -318,7 +376,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Realtime meeting speech translation (local ASR + LLM translation)")
     parser.add_argument("--source-language", default=None, help="ASR source language, e.g. zh, en")
     parser.add_argument("--target-language", default=None, help="Target translation language, e.g. en, zh")
-    parser.add_argument("--asr-model", default=None, help="faster-whisper model name, e.g. medium, large-v3")
+    parser.add_argument("--asr-model", default=None, help="faster-whisper model name, e.g. small, medium")
     parser.add_argument("--translation-model", default=None, help="LLM model for translation, e.g. gpt-5.1")
     return parser.parse_args()
 
