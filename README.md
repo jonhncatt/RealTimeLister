@@ -41,6 +41,7 @@ OPENAI_API_KEY=your_key
 RT_TRANSLATION_MODEL=gpt-5.1
 RT_SOURCE_LANGUAGE=zh
 RT_TARGET_LANGUAGE=en
+RT_AUDIO_INPUT_DEVICE=auto
 RT_ASR_MODEL_NAME=small
 ```
 
@@ -68,6 +69,7 @@ ASR 模型加载优先级如下：
 - 如果你后续仍然只配置 `RT_ASR_MODEL_NAME=small`，程序会继续按“型号名 + 本地缓存”方式工作
 - 如果你希望完全固定使用某个本地目录，仍然应该手动配置 `RT_ASR_MODEL_DIR`
 - 旧变量名仍兼容，例如 `RT_WHISPER_MODEL`、`RT_WHISPER_MODEL_PATH`
+- 音频输入设备可用 `RT_AUDIO_INPUT_DEVICE` 预设，支持 `auto`、设备编号、或设备名
 
 ## 2.2 Hugging Face / 本地模型说明
 
@@ -168,6 +170,7 @@ http://127.0.0.1:8080
 - 中央大字幕区：主显示译文，原文放在上方
 - 状态条：显示当前运行状态
 - Session 面板：显示当前 ASR 来源、beam size、翻译模型
+- Audio Input 下拉框：选择要使用的麦克风
 - History 面板：显示最近识别记录
 
 如果你还想保留旧的终端输出模式：
@@ -179,7 +182,7 @@ python -m realtime_lister.main --terminal
 可选参数：
 
 ```powershell
-python -m realtime_lister.main --source-language zh --target-language en --asr-model small --translation-model gpt-5.1 --host 127.0.0.1 --port 8080
+python -m realtime_lister.main --source-language zh --target-language en --asr-model small --input-device auto --translation-model gpt-5.1 --host 127.0.0.1 --port 8080
 ```
 
 ## 4. 精度与延迟建议
@@ -198,3 +201,4 @@ python -m realtime_lister.main --source-language zh --target-language en --asr-m
 3. 如果延迟较高，先确认 `RT_ASR_MODEL_NAME=small` 且 `RT_ASR_BEAM_SIZE=1`。
 4. 如果报 Hugging Face 下载失败，优先改用 `RT_ASR_MODEL_DIR` 或 `RT_ASR_HF_LOCAL_ONLY=true`。
 5. 如果浏览器没有自动打开，手动访问 `http://127.0.0.1:8080`。
+6. 如果没有麦克风，网页会禁用 Start 按钮并显示输入设备错误；也可以用 `RT_AUDIO_INPUT_DEVICE` 或 `--input-device` 指定设备。

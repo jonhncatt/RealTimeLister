@@ -66,6 +66,7 @@ class Settings:
     asr_download_root: str | None
     asr_local_files_only: bool
     asr_beam_size: int
+    input_device: str
     device: str
     compute_type: str
     source_language: str
@@ -94,6 +95,7 @@ class Settings:
             asr_download_root=str(Path(asr_download_root).expanduser()) if asr_download_root else None,
             asr_local_files_only=_truthy(_env("RT_ASR_HF_LOCAL_ONLY", "RT_HF_LOCAL_FILES_ONLY", default="false")),
             asr_beam_size=max(1, int(_env("RT_ASR_BEAM_SIZE", "RT_BEAM_SIZE", default="1"))),
+            input_device=_env("RT_AUDIO_INPUT_DEVICE", default="auto"),
             device=_env("RT_ASR_DEVICE", "RT_DEVICE", default="auto"),
             compute_type=_env("RT_ASR_COMPUTE_TYPE", "RT_COMPUTE_TYPE", default="int8"),
             source_language=_env("RT_SOURCE_LANGUAGE", default="zh"),
@@ -119,6 +121,72 @@ class TranscriptEntry:
     translate_ms: int
     source_language: str
     target_language: str
+
+
+def _query_input_devices() -> tuple[list[dict[str, Any]], str | None, str | None]:
+    try:
+        devices = sd.query_devices()
+        default_device = sd.default.device
+    except Exception as exc:
+        return [], None, f"Audio device query failed: {exc}"
+
+    default_input_index: int | None = None
+    if isinstance(default_device, (list, tuple)) and default_device:
+        try:
+            if int(default_device[0]) >= 0:
+                default_input_index = int(default_device[0])
+        except Exception:
+            default_input_index = None
+    elif isinstance(default_device, int) and default_device >= 0:
+        default_input_index = default_device
+
+    options: list[dict[str, Any]] = []
+    for index, device in enumerate(devices):
+        input_channels = int(device.get("max_input_channels") or 0)
+        if input_channels <= 0:
+            continue
+        options.append(
+            {
+                "id": str(index),
+                "name": str(device.get("name") or f"Input {index}"),
+                "inputChannels": input_channels,
+                "isDefault": default_input_index == index,
+            }
+        )
+    return options, str(default_input_index) if default_input_index is not None else None, None
+
+
+def _resolve_input_device(selection: str) -> tuple[int, str]:
+    devices, default_input_id, error = _query_input_devices()
+    if error:
+        raise RuntimeError(error)
+    if not devices:
+        raise RuntimeError("No input device available. Connect a microphone or choose a different audio input device.")
+
+    requested = (selection or "auto").strip()
+    if not requested or requested.lower() == "auto":
+        if default_input_id is not None:
+            for item in devices:
+                if item["id"] == default_input_id:
+                    return int(item["id"]), item["name"]
+        first = devices[0]
+        return int(first["id"]), first["name"]
+
+    if requested.lstrip("-").isdigit():
+        for item in devices:
+            if item["id"] == requested:
+                return int(item["id"]), item["name"]
+        raise RuntimeError(f"Audio input device {requested} is not available or has no input channels.")
+
+    lowered = requested.casefold()
+    for item in devices:
+        if item["name"].casefold() == lowered:
+            return int(item["id"]), item["name"]
+    for item in devices:
+        if lowered in item["name"].casefold():
+            return int(item["id"]), item["name"]
+    available = ", ".join(item["name"] for item in devices[:5])
+    raise RuntimeError(f"Audio input device '{requested}' was not found. Available inputs: {available}")
 
 
 def _configure_network_env(settings: Settings) -> None:
@@ -296,6 +364,7 @@ class RealtimeMeetingTranslator:
         self.on_result = on_result
         self.on_info = on_info
         self.console_output = console_output
+        self.input_device_index, self.input_device_name = _resolve_input_device(settings.input_device)
         _configure_network_env(settings)
         model_source = _resolve_asr_model_source(settings)
         try:
@@ -372,6 +441,7 @@ class RealtimeMeetingTranslator:
             "Realtime Meeting Translator started.\n"
             f"- ASR model: {_resolve_asr_model_source(self.settings)}\n"
             f"- ASR beam size: {self.settings.asr_beam_size}\n"
+            f"- Audio input: {self.input_device_name} ({self.input_device_index})\n"
             f"- Source -> Target: {self.settings.source_language} -> {self.settings.target_language}\n"
             f"- Translation model: {self.settings.translation_model}\n"
             "Press Ctrl+C to stop.\n"
@@ -381,7 +451,8 @@ class RealtimeMeetingTranslator:
         if self.on_info:
             self.on_info(
                 f"ASR ready: {_resolve_asr_model_source(self.settings)} | "
-                f"{self.settings.source_language}->{self.settings.target_language}"
+                f"{self.settings.source_language}->{self.settings.target_language} | "
+                f"mic={self.input_device_name}"
             )
         if not self.translator.enabled:
             message = "OPENAI_API_KEY not set. Running ASR-only mode."
@@ -395,6 +466,7 @@ class RealtimeMeetingTranslator:
             blocksize=FRAME_SAMPLES,
             dtype="int16",
             channels=1,
+            device=self.input_device_index,
             callback=self._audio_callback,
         ):
             while not self.stop_event.is_set():
@@ -474,6 +546,27 @@ class WebAppState:
         self.event_bus.unsubscribe(subscriber)
 
     def snapshot(self) -> dict[str, Any]:
+        input_devices, default_input_id, input_error = _query_input_devices()
+        selection = (self.settings.input_device or "auto").strip() or "auto"
+        selected_label = "Auto"
+        if selection.lower() != "auto":
+            selected_label = selection
+            for item in input_devices:
+                if item["id"] == selection or item["name"] == selection:
+                    selected_label = item["name"]
+                    break
+        else:
+            if default_input_id is not None:
+                for item in input_devices:
+                    if item["id"] == default_input_id:
+                        selected_label = f"Auto ({item['name']})"
+                        break
+            elif input_devices:
+                selected_label = f"Auto ({input_devices[0]['name']})"
+            elif input_error:
+                selected_label = "Auto (unavailable)"
+            else:
+                selected_label = "Auto (no input device)"
         with self._lock:
             current = asdict(self._history[-1]) if self._history else None
             asr_source = self.settings.asr_model_path or self.settings.asr_model
@@ -491,6 +584,10 @@ class WebAppState:
                 "asrModelSource": asr_source,
                 "asrResolutionMode": "directory" if self.settings.asr_model_path else "model_name",
                 "asrBeamSize": self.settings.asr_beam_size,
+                "inputDevices": input_devices,
+                "inputDevicesError": input_error,
+                "selectedInputDevice": selection,
+                "selectedInputDeviceLabel": selected_label,
                 "history": [asdict(item) for item in self._history],
                 "current": current,
             }
@@ -525,6 +622,11 @@ class WebAppState:
         self._publish_snapshot()
 
     def start(self) -> tuple[bool, str]:
+        try:
+            _resolve_input_device(self.settings.input_device)
+        except Exception as exc:
+            self._set_status("error", str(exc))
+            return False, str(exc)
         with self._lock:
             if self._running or self._loading:
                 return False, "Session is already running."
@@ -592,6 +694,22 @@ class WebAppState:
         self._publish({"type": "cleared"})
         self._publish_snapshot()
 
+    def set_input_device(self, value: str) -> tuple[bool, str]:
+        normalized = (value or "auto").strip() or "auto"
+        resolved_label = "auto"
+        if normalized.lower() != "auto":
+            try:
+                _, resolved_label = _resolve_input_device(normalized)
+            except Exception as exc:
+                self._set_status("error", str(exc))
+                return False, str(exc)
+        with self._lock:
+            if self._running or self._loading:
+                return False, "Stop the current session before changing the input device."
+            self.settings.input_device = normalized
+        self._set_status("idle", f"Audio input set to {resolved_label}.")
+        return True, "Audio input updated."
+
 
 class RealtimeHTTPServer(ThreadingHTTPServer):
     def __init__(self, server_address: tuple[str, int], handler_class: type[BaseHTTPRequestHandler], app_state: WebAppState):
@@ -647,6 +765,11 @@ def _make_handler(static_dir: Path) -> type[BaseHTTPRequestHandler]:
                 self.server.app_state.clear_history()
                 self._send_json({"ok": True, "message": "History cleared."})
                 return
+            if path == "/api/device":
+                payload = self._read_json()
+                ok, message = self.server.app_state.set_input_device(str(payload.get("device") or "auto"))
+                self._send_json({"ok": ok, "message": message}, status=HTTPStatus.OK if ok else HTTPStatus.CONFLICT)
+                return
             self.send_error(HTTPStatus.NOT_FOUND)
 
         def _serve_static(self, file_path: Path) -> None:
@@ -667,6 +790,16 @@ def _make_handler(static_dir: Path) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+
+        def _read_json(self) -> dict[str, Any]:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            if length <= 0:
+                return {}
+            raw = self.rfile.read(length)
+            try:
+                return json.loads(raw.decode("utf-8"))
+            except Exception:
+                return {}
 
         def _serve_events(self) -> None:
             subscriber = self.server.app_state.subscribe()
@@ -737,6 +870,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-language", default=None, help="ASR source language, e.g. zh, en")
     parser.add_argument("--target-language", default=None, help="Target translation language, e.g. en, zh")
     parser.add_argument("--asr-model", default=None, help="faster-whisper model name, e.g. small, medium")
+    parser.add_argument("--input-device", default=None, help="Audio input device id or name, default auto")
     parser.add_argument("--translation-model", default=None, help="LLM model for translation, e.g. gpt-5.1")
     parser.add_argument("--terminal", action="store_true", help="Run in terminal mode instead of the local web UI")
     parser.add_argument("--host", default="127.0.0.1", help="Host for the local web UI, default 127.0.0.1")
@@ -754,6 +888,8 @@ def main() -> int:
         settings.target_language = args.target_language
     if args.asr_model:
         settings.asr_model = args.asr_model
+    if args.input_device:
+        settings.input_device = args.input_device
     if args.translation_model:
         settings.translation_model = args.translation_model
 
