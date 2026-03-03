@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RealTimeLister</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="backdrop"></div>
+    <main class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Realtime Meeting Translation</p>
+          <h1>Meeting Relay</h1>
+          <p class="summary">译文主屏，原文辅助，控制和历史都留在同一页。</p>
+        </div>
+        <div class="status-pill" id="status-pill">Idle</div>
+      </header>
+
+      <section class="layout">
+        <section class="stage">
+          <div class="panel stage-panel">
+            <div class="panel-topline">
+              <span id="asr-mode">ASR</span>
+              <span id="latency-chip">Waiting</span>
+            </div>
+            <div class="subtitle-stack">
+              <p class="subtitle-label" id="source-label">Source</p>
+              <p class="subtitle-source" id="source-text">Start the session to begin showing source speech.</p>
+              <p class="subtitle-label accent" id="target-label">Translation</p>
+              <p class="subtitle-target" id="target-text">Live translation will appear here.</p>
+            </div>
+          </div>
+
+          <div class="controls-grid">
+            <section class="panel control-panel">
+              <div class="section-title">Controls</div>
+              <div class="button-row">
+                <button id="start-btn" class="btn primary">Start Listening</button>
+                <button id="stop-btn" class="btn muted">Stop</button>
+                <button id="clear-btn" class="btn ghost">Clear History</button>
+              </div>
+              <p class="control-note" id="control-note">Browser connected. Waiting for session start.</p>
+            </section>
+
+            <section class="panel metrics-panel">
+              <div class="section-title">Session</div>
+              <dl class="metric-list">
+                <div>
+                  <dt>ASR Source</dt>
+                  <dd id="asr-source">-</dd>
+                </div>
+                <div>
+                  <dt>Beam</dt>
+                  <dd id="asr-beam">-</dd>
+                </div>
+                <div>
+                  <dt>Direction</dt>
+                  <dd id="direction">-</dd>
+                </div>
+                <div>
+                  <dt>Translator</dt>
+                  <dd id="translator-state">-</dd>
+                </div>
+              </dl>
+            </section>
+          </div>
+        </section>
+
+        <aside class="panel history-panel">
+          <div class="history-header">
+            <div>
+              <p class="section-title">History</p>
+              <p class="history-subtitle">最近识别结果按时间追加。</p>
+            </div>
+            <span class="history-count" id="history-count">0 items</span>
+          </div>
+          <div class="history-list" id="history-list">
+            <div class="history-empty">No transcript yet.</div>
+          </div>
+        </aside>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
