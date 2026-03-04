@@ -22,6 +22,7 @@ import sounddevice as sd
 import webrtcvad
 from dotenv import load_dotenv
 from faster_whisper import WhisperModel
+from faster_whisper.utils import download_model as fw_download_model
 from openai import OpenAI
 
 
@@ -123,6 +124,12 @@ class TranscriptEntry:
     target_language: str
 
 
+@dataclass(slots=True)
+class AsrModelStatus:
+    level: str
+    message: str
+
+
 def _query_input_devices() -> tuple[list[dict[str, Any]], str | None, str | None]:
     try:
         devices = sd.query_devices()
@@ -207,6 +214,62 @@ def _resolve_asr_model_source(settings: Settings) -> str:
     if not model_path.exists():
         raise FileNotFoundError(f"RT_ASR_MODEL_DIR does not exist: {model_path}")
     return str(model_path)
+
+
+def _inspect_asr_model_status(settings: Settings) -> AsrModelStatus:
+    if settings.asr_model_path:
+        model_path = Path(settings.asr_model_path).expanduser()
+        if not model_path.exists():
+            return AsrModelStatus(
+                level="error",
+                message=f"Configured local model directory does not exist: {model_path}",
+            )
+        required = ["config.json", "model.bin", "tokenizer.json"]
+        missing = [name for name in required if not (model_path / name).exists()]
+        if missing:
+            return AsrModelStatus(
+                level="error",
+                message=(
+                    f"Local model directory is incomplete: {model_path}. "
+                    f"Missing files: {', '.join(missing)}"
+                ),
+            )
+        return AsrModelStatus(
+            level="ready",
+            message=f"Using fixed local model directory: {model_path}",
+        )
+
+    if settings.asr_local_files_only:
+        try:
+            cached_path = fw_download_model(
+                settings.asr_model,
+                local_files_only=True,
+                cache_dir=settings.asr_download_root,
+            )
+            return AsrModelStatus(
+                level="ready",
+                message=f"Using cached model for '{settings.asr_model}': {cached_path}",
+            )
+        except Exception:
+            cache_hint = settings.asr_download_root or "default Hugging Face cache"
+            return AsrModelStatus(
+                level="error",
+                message=(
+                    f"Offline cache-only mode is enabled for '{settings.asr_model}', "
+                    f"but the model was not found in {cache_hint}. "
+                    "Set RT_ASR_MODEL_DIR to a copied local model directory or preload the cache."
+                ),
+            )
+
+    cache_hint = settings.asr_download_root or "default Hugging Face cache"
+    mirror_hint = " via RT_ASR_HF_ENDPOINT" if settings.hf_endpoint else ""
+    return AsrModelStatus(
+        level="info",
+        message=(
+            f"ASR will use model name '{settings.asr_model}'. "
+            f"It will load from {cache_hint} first, and if missing it will try downloading from Hugging Face{mirror_hint}."
+        ),
+    )
 
 
 def _build_model_load_error(settings: Settings, model_source: str, exc: Exception) -> RuntimeError:
@@ -547,6 +610,7 @@ class WebAppState:
 
     def snapshot(self) -> dict[str, Any]:
         input_devices, default_input_id, input_error = _query_input_devices()
+        model_status = _inspect_asr_model_status(self.settings)
         selection = (self.settings.input_device or "auto").strip() or "auto"
         selected_label = "Auto"
         if selection.lower() != "auto":
@@ -584,6 +648,8 @@ class WebAppState:
                 "asrModelSource": asr_source,
                 "asrResolutionMode": "directory" if self.settings.asr_model_path else "model_name",
                 "asrBeamSize": self.settings.asr_beam_size,
+                "asrModelStatusLevel": model_status.level,
+                "asrModelStatusMessage": model_status.message,
                 "inputDevices": input_devices,
                 "inputDevicesError": input_error,
                 "selectedInputDevice": selection,
@@ -622,6 +688,10 @@ class WebAppState:
         self._publish_snapshot()
 
     def start(self) -> tuple[bool, str]:
+        model_status = _inspect_asr_model_status(self.settings)
+        if model_status.level == "error":
+            self._set_status("error", model_status.message)
+            return False, model_status.message
         try:
             _resolve_input_device(self.settings.input_device)
         except Exception as exc:
