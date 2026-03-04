@@ -13,6 +13,8 @@ const els = {
   direction: document.getElementById("direction"),
   audioInputState: document.getElementById("audio-input-state"),
   translatorState: document.getElementById("translator-state"),
+  modelStatusCard: document.getElementById("model-status-card"),
+  modelStatusText: document.getElementById("model-status-text"),
   historyCount: document.getElementById("history-count"),
   historyList: document.getElementById("history-list"),
   startBtn: document.getElementById("start-btn"),
@@ -73,6 +75,8 @@ function applyState(state) {
   els.direction.textContent = `${state.sourceLanguage} → ${state.targetLanguage}`;
   els.audioInputState.textContent = state.selectedInputDeviceLabel || state.selectedInputDevice;
   els.translatorState.textContent = state.translatorEnabled ? state.translationModel : "ASR only";
+  els.modelStatusText.textContent = state.asrModelStatusMessage;
+  els.modelStatusCard.className = `status-card ${statusClass(state.asrModelStatusLevel)}`;
   els.sourceLabel.textContent = `${state.sourceLanguage.toUpperCase()} Source`;
   els.targetLabel.textContent = `${state.targetLanguage.toUpperCase()} Translation`;
   els.sourceText.textContent = current?.source_text || "Start the session to begin showing source speech.";
@@ -85,7 +89,7 @@ function applyState(state) {
     state.lastInfo ||
     state.statusMessage;
 
-  els.startBtn.disabled = state.running || state.loading || noInputs;
+  els.startBtn.disabled = state.running || state.loading || noInputs || state.asrModelStatusLevel === "error";
   els.stopBtn.disabled = !state.running && !state.loading;
   els.clearBtn.disabled = state.running || state.loading ? false : state.history.length === 0;
   els.inputDeviceSelect.disabled = state.running || state.loading || noInputs;

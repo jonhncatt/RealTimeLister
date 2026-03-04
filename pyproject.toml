@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "Realtime meeting translation using local ASR and company LLM translation API"
 requires-python = ">=3.10"
 
+[project.scripts]
+realtime-lister = "realtime_lister.main:main"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 include-package-data = true
