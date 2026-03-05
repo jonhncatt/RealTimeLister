@@ -8,21 +8,27 @@ const els = {
   asrMode: document.getElementById("asr-mode"),
   controlNote: document.getElementById("control-note"),
   inputDeviceSelect: document.getElementById("input-device-select"),
+  translationPromptInput: document.getElementById("translation-prompt-input"),
   asrSource: document.getElementById("asr-source"),
   asrBeam: document.getElementById("asr-beam"),
   direction: document.getElementById("direction"),
   audioInputState: document.getElementById("audio-input-state"),
   translatorState: document.getElementById("translator-state"),
+  speakerSplitState: document.getElementById("speaker-split-state"),
   modelStatusCard: document.getElementById("model-status-card"),
   modelStatusText: document.getElementById("model-status-text"),
   historyCount: document.getElementById("history-count"),
   historyList: document.getElementById("history-list"),
   startBtn: document.getElementById("start-btn"),
   stopBtn: document.getElementById("stop-btn"),
+  savePromptBtn: document.getElementById("save-prompt-btn"),
   clearBtn: document.getElementById("clear-btn"),
 };
 
 let currentState = null;
+let promptFocused = false;
+let promptDirty = false;
+els.savePromptBtn.disabled = true;
 
 function escapeHtml(text) {
   return text
@@ -47,6 +53,7 @@ function renderHistory(history) {
         <article class="history-item">
           <div class="history-meta">
             <span>${escapeHtml(item.timestamp)}</span>
+            <span>${escapeHtml(item.speaker_label || "Speaker ?")}</span>
             <span>${escapeHtml(String(item.translate_ms))} ms</span>
           </div>
           <p class="history-source">${escapeHtml(item.source_text)}</p>
@@ -74,9 +81,15 @@ function applyState(state) {
   els.direction.textContent = `${state.sourceLanguage} → ${state.targetLanguage}`;
   els.audioInputState.textContent = state.selectedInputDeviceLabel || state.selectedInputDevice;
   els.translatorState.textContent = state.translatorEnabled ? state.translationModel : "ASR only";
+  els.speakerSplitState.textContent = state.speakerSplitEnabled
+    ? `On (max ${state.speakerMaxSpeakers})`
+    : "Off";
   els.modelStatusText.textContent = state.asrModelStatusMessage;
   els.modelStatusCard.className = `status-card ${statusClass(state.asrModelStatusLevel)}`;
-  els.sourceLabel.textContent = `${state.sourceLanguage.toUpperCase()} Source`;
+  const speakerLabel = current?.speaker_label || "";
+  els.sourceLabel.textContent = speakerLabel
+    ? `${state.sourceLanguage.toUpperCase()} Source · ${speakerLabel}`
+    : `${state.sourceLanguage.toUpperCase()} Source`;
   els.targetLabel.textContent = `${state.targetLanguage.toUpperCase()} Translation`;
   els.sourceText.textContent = current?.source_text || "Start the session to begin showing source speech.";
   els.targetText.textContent = current?.translated_text || "Live translation will appear here.";
@@ -92,6 +105,10 @@ function applyState(state) {
   els.stopBtn.disabled = !state.running && !state.loading;
   els.clearBtn.disabled = state.running || state.loading ? false : state.history.length === 0;
   els.inputDeviceSelect.disabled = state.running || state.loading || noInputs;
+  if (!promptFocused && !promptDirty) {
+    els.translationPromptInput.value = state.translationPromptTemplate || "";
+  }
+  els.savePromptBtn.disabled = !promptDirty;
 
   renderInputDevices(state);
 
@@ -172,6 +189,33 @@ function bindControls() {
   els.inputDeviceSelect.addEventListener("change", async (event) => {
     try {
       await postJson("/api/device", { device: event.target.value });
+    } catch (error) {
+      els.controlNote.textContent = error.message;
+    }
+  });
+
+  els.translationPromptInput.addEventListener("focus", () => {
+    promptFocused = true;
+  });
+  els.translationPromptInput.addEventListener("blur", () => {
+    promptFocused = false;
+  });
+  els.translationPromptInput.addEventListener("input", () => {
+    if (!currentState) {
+      promptDirty = true;
+      els.savePromptBtn.disabled = false;
+      return;
+    }
+    promptDirty = els.translationPromptInput.value !== (currentState.translationPromptTemplate || "");
+    els.savePromptBtn.disabled = !promptDirty;
+  });
+
+  els.savePromptBtn.addEventListener("click", async () => {
+    try {
+      await postJson("/api/translation-prompt", { template: els.translationPromptInput.value });
+      promptDirty = false;
+      els.savePromptBtn.disabled = true;
+      els.controlNote.textContent = "Translation prompt saved.";
     } catch (error) {
       els.controlNote.textContent = error.message;
     }

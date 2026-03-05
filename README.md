@@ -4,6 +4,9 @@
 
 - 语音识别（ASR）在本地跑（`faster-whisper`）
 - 翻译调用公司 LLM（例如 `gpt-5.1`）
+- Web UI 支持可用麦克风列表选择
+- 支持轻量“伪说话人分割”（基于分段声学特征）
+- 支持自定义翻译 Prompt 模板
 
 ---
 
@@ -69,6 +72,7 @@ copy env.offline-model.example .env
 ```env
 OPENAI_API_KEY=your_key
 RT_TRANSLATION_MODEL=gpt-5.1
+RT_TRANSLATION_PROMPT_TEMPLATE=You are a professional meeting interpreter.\nTranslate from {source_language} to {target_language}.\nSpeaker context: {speaker_label}.\nKeep original meaning, names, and technical terms.\nDo not add explanations.{glossary_block}
 RT_SOURCE_LANGUAGE=zh
 RT_TARGET_LANGUAGE=en
 RT_AUDIO_INPUT_DEVICE=auto
@@ -81,6 +85,15 @@ OFFICETOOL_OPENAI_BASE_URL=https://your-company-gateway/v1
 OFFICETOOL_CA_CERT_PATH=C:/path/to/company-root-ca.pem
 OFFICETOOL_USE_RESPONSES_API=false
 ```
+
+可选占位符（用于 `RT_TRANSLATION_PROMPT_TEMPLATE`）：
+
+- `{source_language}`
+- `{target_language}`
+- `{speaker_label}`
+- `{speaker_id}`
+- `{glossary}`
+- `{glossary_block}`
 
 ---
 
@@ -128,6 +141,22 @@ RT_ASR_HF_LOCAL_ONLY=false
 
 - 下载成功后不会自动回填 `RT_ASR_MODEL_DIR`
 - 之后还是“模型名 + 缓存”路径
+
+---
+
+## 4.4 说话人伪分割（轻量）
+
+```env
+RT_SPEAKER_SPLIT_ENABLED=true
+RT_SPEAKER_MAX=4
+RT_SPEAKER_MATCH_THRESHOLD=0.12
+```
+
+行为：
+
+- 在每个 VAD 语音段上做轻量声学特征匹配
+- 输出 `Speaker 1/2/...` 的伪标签（不是严格声纹识别）
+- 目标是“可读性提升”，不是司法级 diarization
 
 ---
 
@@ -191,6 +220,12 @@ realtime-lister --source-language zh --target-language en --asr-model small --in
 
 - `ASR Strategy`：当前是固定目录/离线缓存/联网自动哪一种
 - `ASR Readiness`：当前模型是否可用；若不可用会给出具体原因
+
+然后看三处交互：
+
+- `Audio Input`：可用麦克风列表（默认 `Auto`）
+- `Translation Prompt`：可直接改模板并点 `Save Prompt`
+- `History`：会显示 `Speaker N` 伪说话人标签
 
 如果 `ASR Readiness` 是错误，`Start` 会被禁用或直接返回错误，不会静默卡住。
 
