@@ -1,11 +1,30 @@
 # RealTimeLister
 
-本项目用于会议实时翻译：
+会议实时翻译工具：
 
-- 语音识别（ASR）在本地运行（`faster-whisper`）
-- 翻译调用公司 LLM（例如 `gpt-5.1`，OpenAI 兼容接口）
+- 语音识别（ASR）在本地跑（`faster-whisper`）
+- 翻译调用公司 LLM（例如 `gpt-5.1`）
 
-这样即使公司没有 `transcribe` API，也可以实现实时字幕翻译。
+---
+
+## 先看这段：为什么有时下载、有时不下载
+
+程序只有三种 ASR 运行策略，且只会命中其中一种：
+
+1. `Fixed Local Directory`  
+配置了 `RT_ASR_MODEL_DIR`，永远优先读这个目录，不自动走 Hugging Face。
+
+2. `Offline Cache Only`  
+没有 `RT_ASR_MODEL_DIR`，但配置了 `RT_ASR_HF_LOCAL_ONLY=true`。  
+只允许读本地缓存，不允许下载。缓存没模型就直接报错。
+
+3. `Model Name + Auto Download`  
+没有 `RT_ASR_MODEL_DIR`，且 `RT_ASR_HF_LOCAL_ONLY=false`（默认）。  
+先读本地缓存，缓存没有才尝试下载。
+
+`RT_ASR_MODEL_DIR` 的优先级最高，这是整个项目最关键的一条规则。
+
+---
 
 ## 1. Windows 安装
 
@@ -17,30 +36,35 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 pip install -e .
-copy .env.example .env
 ```
 
-安装完成后，推荐直接使用命令：
+安装后推荐命令：
 
 ```powershell
 realtime-lister
 ```
 
-## 2. 配置 `.env`
+`python -m realtime_lister.main` 也可以，这是标准 Python 模块运行方式；只是命令更长。
 
-推荐不要直接从零手写，先按场景复制模板：
+---
+
+## 2. 先选一个模板（只选一个）
 
 ```powershell
 copy env.offline-model.example .env
 ```
 
-可用模板：
+三个模板：
 
-- `env.online.example`：公司机器能访问 Hugging Face，首次运行自动下载
-- `env.offline-model.example`：公司机器不能访问 Hugging Face，使用提前拷贝好的本地模型
-- `env.hf-mirror.example`：公司内部有 Hugging Face 镜像
+- `env.offline-model.example`：公司机器不能访问 HF（推荐公司内网）
+- `env.online.example`：公司机器可访问 HF
+- `env.hf-mirror.example`：走公司 HF 镜像
 
-如果你还是想手动改，至少配置：
+不要混用多个模板内容。先选一个，再改字段。
+
+---
+
+## 3. `.env` 最小必填项
 
 ```env
 OPENAI_API_KEY=your_key
@@ -48,10 +72,9 @@ RT_TRANSLATION_MODEL=gpt-5.1
 RT_SOURCE_LANGUAGE=zh
 RT_TARGET_LANGUAGE=en
 RT_AUDIO_INPUT_DEVICE=auto
-RT_ASR_MODEL_NAME=small
 ```
 
-如果走公司网关，再配置：
+公司网关（可选）：
 
 ```env
 OFFICETOOL_OPENAI_BASE_URL=https://your-company-gateway/v1
@@ -59,66 +82,58 @@ OFFICETOOL_CA_CERT_PATH=C:/path/to/company-root-ca.pem
 OFFICETOOL_USE_RESPONSES_API=false
 ```
 
-说明：程序会优先按 `OFFICETOOL_USE_RESPONSES_API` 调用；如果网关返回 `405`，会自动切换 `responses/chat-completions` 方式重试。
+---
 
-## 2.1 ASR 模型规则
+## 4. ASR 配置规则（统一口径）
 
-ASR 模型加载优先级如下：
-
-1. 如果配置了 `RT_ASR_MODEL_DIR`，优先使用这个本地目录
-2. 如果没有配置 `RT_ASR_MODEL_DIR`，则读取 `RT_ASR_MODEL_NAME`
-3. 如果本地缓存里没有 `RT_ASR_MODEL_NAME` 对应模型，`faster-whisper` 会尝试从 Hugging Face 下载
-
-注意：
-
-- 下载完成后，程序不会自动把 `.env` 改写成 `RT_ASR_MODEL_DIR=...`
-- 如果你后续仍然只配置 `RT_ASR_MODEL_NAME=small`，程序会继续按“型号名 + 本地缓存”方式工作
-- 如果你希望完全固定使用某个本地目录，仍然应该手动配置 `RT_ASR_MODEL_DIR`
-- 旧变量名仍兼容，例如 `RT_WHISPER_MODEL`、`RT_WHISPER_MODEL_PATH`
-- 音频输入设备可用 `RT_AUDIO_INPUT_DEVICE` 预设，支持 `auto`、设备编号、或设备名
-
-## 2.2 Hugging Face / 本地模型说明
-
-默认情况下，`faster-whisper` 会按 `RT_ASR_MODEL_NAME` 从 Hugging Face 拉取模型。
-
-如果公司网络不能访问 Hugging Face，优先用这两种方式：
-
-1. 直接指定本地模型目录
+### 4.1 固定目录模式（最稳）
 
 ```env
 RT_ASR_MODEL_DIR=C:/models/faster-whisper-small
-```
-
-注意：这里必须是 `faster-whisper/CTranslate2` 转换后的模型目录，不是原始 Whisper 的 PyTorch 权重目录。
-
-2. 只使用本地缓存，不允许联网下载
-
-```env
-RT_ASR_HF_CACHE_DIR=C:/hf-cache
 RT_ASR_HF_LOCAL_ONLY=true
 ```
 
-如果公司内部有 Hugging Face 镜像，也可以配置：
+行为：
+
+- 启动只读 `RT_ASR_MODEL_DIR`
+- 不会自动下载
+- 目录不存在/缺文件就直接报错
+
+### 4.2 离线缓存模式
 
 ```env
-RT_ASR_HF_ENDPOINT=https://your-hf-mirror
+RT_ASR_MODEL_NAME=small
+RT_ASR_HF_LOCAL_ONLY=true
+RT_ASR_HF_CACHE_DIR=C:/hf-cache
 ```
 
-如果公司代理需要自签 CA，请配置：
+行为：
+
+- 只读缓存
+- 缓存无模型就直接报错
+
+### 4.3 联网自动模式
 
 ```env
-OFFICETOOL_CA_CERT_PATH=C:/path/to/company-root-ca.pem
+RT_ASR_MODEL_NAME=small
+RT_ASR_HF_LOCAL_ONLY=false
 ```
 
-这项配置现在会同时用于公司 LLM 网关和 Hugging Face 模型下载。
+行为：
 
-## 2.3 不能访问 Hugging Face 时，如何在外网机器下载
+- 先读缓存
+- 缓存没有时才下载
 
-仓库里加了一个下载脚本：
+注意：
 
-[`scripts/download_faster_whisper_model.py`](/Users/zhoudali/Desktop/RealTimeLister/scripts/download_faster_whisper_model.py)
+- 下载成功后不会自动回填 `RT_ASR_MODEL_DIR`
+- 之后还是“模型名 + 缓存”路径
 
-在一台能访问外网的机器上执行：
+---
+
+## 5. 公司不能访问 HF 时，怎么准备模型
+
+在能访问外网的机器上：
 
 ```powershell
 python -m venv .venv
@@ -127,88 +142,73 @@ pip install -r requirements.txt
 python scripts/download_faster_whisper_model.py --model small --output-dir C:/temp/faster-whisper-small
 ```
 
-如果你是在 macOS/Linux 外网机器上准备模型：
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python scripts/download_faster_whisper_model.py --model small --output-dir ./build/faster-whisper-small
-```
-
-下载完成后，把整个目录拷到公司 Windows 机器，例如：
+把目录拷到公司机器，例如：
 
 ```text
 C:/models/faster-whisper-small
 ```
 
-然后公司机器的 `.env` 配成：
+公司机器 `.env`：
 
 ```env
 RT_ASR_MODEL_DIR=C:/models/faster-whisper-small
 RT_ASR_HF_LOCAL_ONLY=true
 ```
 
-目录里至少应该有这些文件：
+目录至少要有：
 
 - `config.json`
 - `model.bin`
 - `tokenizer.json`
 
-脚本会做这三个文件的完整性检查。
+---
 
-## 3. 运行
-
-默认会启动本地网页字幕页，并自动打开浏览器。
+## 6. 运行
 
 ```powershell
 realtime-lister
 ```
 
-`python -m realtime_lister.main` 也可以用，这是标准的 Python “按模块运行”方式；现在保留兼容，但推荐优先用 `realtime-lister`。
+默认地址：`http://127.0.0.1:8080`
 
-默认地址：
-
-```text
-http://127.0.0.1:8080
-```
-
-界面包含：
-
-- 中央大字幕区：主显示译文，原文放在上方
-- 状态条：显示当前运行状态
-- Session 面板：显示当前 ASR 来源、beam size、翻译模型
-- ASR Readiness：显示当前模型是固定本地目录、缓存命中，还是将尝试从 Hugging Face 下载
-- Audio Input 下拉框：选择要使用的麦克风
-- History 面板：显示最近识别记录
-
-如果你还想保留旧的终端输出模式：
+终端模式：
 
 ```powershell
 realtime-lister --terminal
 ```
 
-可选参数：
+可选参数示例：
 
 ```powershell
 realtime-lister --source-language zh --target-language en --asr-model small --input-device auto --translation-model gpt-5.1 --host 127.0.0.1 --port 8080
 ```
 
-## 4. 精度与延迟建议
+---
 
-- 默认快速档：`RT_ASR_MODEL_NAME=small`
-- 精度优先：`RT_ASR_MODEL_NAME=medium`
-- 更快但更容易掉字：`RT_ASR_MODEL_NAME=tiny`
-- CPU 机器建议：`RT_ASR_COMPUTE_TYPE=int8`
-- 低延迟建议：`RT_ASR_BEAM_SIZE=1`
-- 开场前准备术语表：`RT_GLOSSARY=术语A=Term A\n术语B=Term B`
+## 7. 页面上你应该看什么
 
-## 5. 常见问题
+启动后先看两个位置：
 
-1. 如果出现麦克风权限问题，请在 Windows 隐私设置中允许终端访问麦克风。
-2. 如果翻译接口报 401/403，检查 `OPENAI_API_KEY` 与公司网关权限。
-3. 如果延迟较高，先确认 `RT_ASR_MODEL_NAME=small` 且 `RT_ASR_BEAM_SIZE=1`。
-4. 如果报 Hugging Face 下载失败，优先改用 `RT_ASR_MODEL_DIR` 或 `RT_ASR_HF_LOCAL_ONLY=true`。
-5. 如果浏览器没有自动打开，手动访问 `http://127.0.0.1:8080`。
-6. 如果没有麦克风，网页会禁用 Start 按钮并显示输入设备错误；也可以用 `RT_AUDIO_INPUT_DEVICE` 或 `--input-device` 指定设备。
-7. 如果 ASR Readiness 显示本地模型目录缺失或离线缓存缺失，先修正 `RT_ASR_MODEL_DIR`，或允许联网下载 / 预热缓存。
+- `ASR Strategy`：当前是固定目录/离线缓存/联网自动哪一种
+- `ASR Readiness`：当前模型是否可用；若不可用会给出具体原因
+
+如果 `ASR Readiness` 是错误，`Start` 会被禁用或直接返回错误，不会静默卡住。
+
+---
+
+## 8. 常见问题
+
+1. 没有麦克风  
+页面会显示输入设备错误，`Start` 会禁用。可通过 `RT_AUDIO_INPUT_DEVICE` 或 `--input-device` 指定设备。
+
+2. 页面没提示模型问题  
+现在请看 `ASR Readiness` 卡片，它会直接显示目录缺失、离线缓存缺失等原因。
+
+3. 延迟高  
+先用：
+`RT_ASR_MODEL_NAME=small`
+`RT_ASR_BEAM_SIZE=1`
+`RT_ASR_COMPUTE_TYPE=int8`
+
+4. 翻译接口 401/403  
+检查 `OPENAI_API_KEY`、网关地址和权限。
