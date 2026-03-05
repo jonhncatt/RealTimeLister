@@ -221,7 +221,24 @@ h1 {
   font: inherit;
 }
 
+.prompt-input {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  padding: 12px 14px;
+  font: inherit;
+  min-height: 132px;
+  resize: vertical;
+  line-height: 1.36;
+}
+
 .input-select:disabled {
+  opacity: 0.5;
+}
+
+.prompt-input:disabled {
   opacity: 0.5;
 }
 
@@ -265,6 +282,13 @@ h1 {
 .history-subtitle {
   margin: 12px 0 0;
   color: var(--muted);
+}
+
+.control-hint {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
 }
 
 .metric-list {

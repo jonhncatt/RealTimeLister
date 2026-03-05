@@ -42,9 +42,17 @@
                   <option value="auto">Auto</option>
                 </select>
               </label>
+              <label class="select-block">
+                <span class="select-label">Translation Prompt</span>
+                <textarea id="translation-prompt-input" class="prompt-input" rows="5"></textarea>
+              </label>
+              <p class="control-hint">
+                可用占位符：{source_language} {target_language} {speaker_label} {speaker_id} {glossary} {glossary_block}
+              </p>
               <div class="button-row">
                 <button id="start-btn" class="btn primary">Start Listening</button>
                 <button id="stop-btn" class="btn muted">Stop</button>
+                <button id="save-prompt-btn" class="btn muted">Save Prompt</button>
                 <button id="clear-btn" class="btn ghost">Clear History</button>
               </div>
               <p class="control-note" id="control-note">Browser connected. Waiting for session start.</p>
@@ -73,6 +81,10 @@
                   <dt>Translator</dt>
                   <dd id="translator-state">-</dd>
                 </div>
+                <div>
+                  <dt>Speaker Split</dt>
+                  <dd id="speaker-split-state">-</dd>
+                </div>
               </dl>
               <div class="status-card" id="model-status-card">
                 <p class="status-card-label">ASR Readiness</p>
@@ -86,7 +98,7 @@
           <div class="history-header">
             <div>
               <p class="section-title">History</p>
-              <p class="history-subtitle">最近识别结果按时间追加。</p>
+              <p class="history-subtitle">最近识别结果按时间追加，包含伪说话人标签。</p>
             </div>
             <span class="history-count" id="history-count">0 items</span>
           </div>
