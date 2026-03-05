@@ -130,6 +130,20 @@ class AsrModelStatus:
     message: str
 
 
+@dataclass(slots=True)
+class AsrStrategy:
+    key: str
+    label: str
+
+
+def _resolve_asr_strategy(settings: Settings) -> AsrStrategy:
+    if settings.asr_model_path:
+        return AsrStrategy(key="fixed_dir", label="Fixed Local Directory")
+    if settings.asr_local_files_only:
+        return AsrStrategy(key="offline_cache_only", label="Offline Cache Only")
+    return AsrStrategy(key="online_auto", label="Model Name + Auto Download")
+
+
 def _query_input_devices() -> tuple[list[dict[str, Any]], str | None, str | None]:
     try:
         devices = sd.query_devices()
@@ -611,6 +625,7 @@ class WebAppState:
     def snapshot(self) -> dict[str, Any]:
         input_devices, default_input_id, input_error = _query_input_devices()
         model_status = _inspect_asr_model_status(self.settings)
+        strategy = _resolve_asr_strategy(self.settings)
         selection = (self.settings.input_device or "auto").strip() or "auto"
         selected_label = "Auto"
         if selection.lower() != "auto":
@@ -647,6 +662,8 @@ class WebAppState:
                 "translatorEnabled": bool(self.settings.api_key),
                 "asrModelSource": asr_source,
                 "asrResolutionMode": "directory" if self.settings.asr_model_path else "model_name",
+                "asrStrategyKey": strategy.key,
+                "asrStrategyName": strategy.label,
                 "asrBeamSize": self.settings.asr_beam_size,
                 "asrModelStatusLevel": model_status.level,
                 "asrModelStatusMessage": model_status.message,
@@ -907,9 +924,11 @@ def run_web_interface(settings: Settings, host: str, port: int, open_browser: bo
     server = RealtimeHTTPServer((host, port), handler_class, app_state)
     browser_host = "127.0.0.1" if host == "0.0.0.0" else host
     url = f"http://{browser_host}:{port}"
+    strategy = _resolve_asr_strategy(settings)
     print(
         "Realtime Meeting Translator Web UI\n"
         f"- URL: {url}\n"
+        f"- ASR strategy: {strategy.label}\n"
         f"- ASR source: {settings.asr_model_path or settings.asr_model}\n"
         f"- Translation model: {settings.translation_model}\n"
         "Use the browser controls to start or stop listening.\n"

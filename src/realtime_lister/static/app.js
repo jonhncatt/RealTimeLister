@@ -68,8 +68,7 @@ function applyState(state) {
   els.statusPill.textContent = state.statusMessage;
   els.statusPill.className = `status-pill ${statusClass(state.statusLevel)}`;
   els.latencyChip.textContent = current ? `${current.translate_ms} ms` : "Waiting";
-  els.asrMode.textContent =
-    state.asrResolutionMode === "directory" ? "ASR · Fixed Local Dir" : "ASR · Model Name + Cache";
+  els.asrMode.textContent = `ASR · ${state.asrStrategyName || "Unknown Strategy"}`;
   els.asrSource.textContent = state.asrModelSource;
   els.asrBeam.textContent = String(state.asrBeamSize);
   els.direction.textContent = `${state.sourceLanguage} → ${state.targetLanguage}`;
