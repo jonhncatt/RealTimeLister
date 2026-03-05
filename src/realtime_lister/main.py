@@ -76,6 +76,15 @@ def _truthy(raw: str) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _normalize_source_language(raw: str, *, default: str = "auto") -> str:
+    value = (raw or "").strip().lower()
+    if not value:
+        return default
+    if value in {"auto", "automatic", "detect", "auto-detect"}:
+        return "auto"
+    return value
+
+
 def _normalize_translation_prompt_template(raw: str) -> str:
     value = (raw or "").replace("\\n", "\n").strip()
     return value or DEFAULT_TRANSLATION_PROMPT_TEMPLATE
@@ -165,7 +174,7 @@ class Settings:
             input_device=_env("RT_AUDIO_INPUT_DEVICE", default="auto"),
             device=_env("RT_ASR_DEVICE", "RT_DEVICE", default="auto"),
             compute_type=_env("RT_ASR_COMPUTE_TYPE", "RT_COMPUTE_TYPE", default="int8"),
-            source_language=_env("RT_SOURCE_LANGUAGE", default="zh"),
+            source_language=_normalize_source_language(_env("RT_SOURCE_LANGUAGE", default="auto")),
             target_language=_env("RT_TARGET_LANGUAGE", default="en"),
             translation_model=_env("RT_TRANSLATION_MODEL", default="gpt-5.1"),
             translation_prompt_template=prompt_template,
@@ -390,11 +399,22 @@ class TranslatorClient:
             kwargs["base_url"] = settings.base_url
         self.client = OpenAI(**kwargs)
 
-    def translate(self, text: str, *, speaker_label: str = "Speaker 1", speaker_id: str = "speaker-1") -> str:
+    def translate(
+        self,
+        text: str,
+        *,
+        speaker_label: str = "Speaker 1",
+        speaker_id: str = "speaker-1",
+        source_language: str | None = None,
+    ) -> str:
         if not text.strip() or not self.enabled or self.client is None:
             return text
 
-        system_prompt = self._build_system_prompt(speaker_label=speaker_label, speaker_id=speaker_id)
+        system_prompt = self._build_system_prompt(
+            speaker_label=speaker_label,
+            speaker_id=speaker_id,
+            source_language=source_language,
+        )
 
         try:
             if self._use_responses_api:
@@ -417,14 +437,17 @@ class TranslatorClient:
                 return translated or text
             raise
 
-    def _build_system_prompt(self, *, speaker_label: str, speaker_id: str) -> str:
+    def _build_system_prompt(self, *, speaker_label: str, speaker_id: str, source_language: str | None = None) -> str:
         template = _normalize_translation_prompt_template(self.settings.translation_prompt_template)
         glossary_block = ""
         if self.settings.glossary:
             glossary_block = f"\nApply this glossary strictly when relevant:\n{self.settings.glossary}"
+        effective_source_language = _normalize_source_language(source_language or self.settings.source_language)
+        if effective_source_language == "auto":
+            effective_source_language = "detected speech language"
         try:
             return template.format(
-                source_language=self.settings.source_language,
+                source_language=effective_source_language,
                 target_language=self.settings.target_language,
                 speaker_label=speaker_label,
                 speaker_id=speaker_id,
@@ -654,27 +677,36 @@ class RealtimeMeetingTranslator:
                     _ = self.audio_queue.get_nowait()
                     self.audio_queue.put_nowait(frame)
 
-    def _segment_to_text(self, pcm16le: bytes) -> str:
+    def _segment_to_text(self, pcm16le: bytes) -> tuple[str, str]:
         pcm = np.frombuffer(pcm16le, dtype=np.int16).astype(np.float32) / 32768.0
-        segments, _ = self.model.transcribe(
+        configured_source = _normalize_source_language(self.settings.source_language)
+        language_hint = None if configured_source == "auto" else configured_source
+        segments, info = self.model.transcribe(
             pcm,
-            language=self.settings.source_language,
+            language=language_hint,
             beam_size=self.settings.asr_beam_size,
             vad_filter=False,
             word_timestamps=False,
             condition_on_previous_text=True,
         )
         text = " ".join(seg.text.strip() for seg in segments if seg.text.strip()).strip()
-        return text
+        detected = _normalize_source_language(getattr(info, "language", "") or "", default="")
+        effective_source = detected or configured_source
+        return text, effective_source
 
     def _process_segment(self, pcm16le: bytes) -> None:
         speaker_id, speaker_label = self.speaker_diarizer.assign(pcm16le)
-        source_text = self._segment_to_text(pcm16le)
+        source_text, segment_source_language = self._segment_to_text(pcm16le)
         if not source_text:
             return
 
         started = time.perf_counter()
-        translated = self.translator.translate(source_text, speaker_label=speaker_label, speaker_id=speaker_id)
+        translated = self.translator.translate(
+            source_text,
+            speaker_label=speaker_label,
+            speaker_id=speaker_id,
+            source_language=segment_source_language,
+        )
         spent_ms = int((time.perf_counter() - started) * 1000)
 
         now = time.strftime("%H:%M:%S")
@@ -685,7 +717,7 @@ class RealtimeMeetingTranslator:
             source_text=source_text,
             translated_text=translated,
             translate_ms=spent_ms,
-            source_language=self.settings.source_language,
+            source_language=segment_source_language,
             target_language=self.settings.target_language,
         )
         if self.console_output:
@@ -698,6 +730,7 @@ class RealtimeMeetingTranslator:
             self.on_result(entry)
 
     def run(self) -> None:
+        source_display = "auto-detect" if _normalize_source_language(self.settings.source_language) == "auto" else self.settings.source_language
         startup_message = (
             "Realtime Meeting Translator started.\n"
             f"- ASR model: {_resolve_asr_model_source(self.settings)}\n"
@@ -705,7 +738,7 @@ class RealtimeMeetingTranslator:
             f"- Audio input: {self.input_device_name} ({self.input_device_index})\n"
             f"- Speaker split: {'on' if self.settings.speaker_split_enabled else 'off'} "
             f"(max={self.settings.speaker_max_speakers})\n"
-            f"- Source -> Target: {self.settings.source_language} -> {self.settings.target_language}\n"
+            f"- Source -> Target: {source_display} -> {self.settings.target_language}\n"
             f"- Translation model: {self.settings.translation_model}\n"
             "Press Ctrl+C to stop.\n"
         )
@@ -714,7 +747,7 @@ class RealtimeMeetingTranslator:
         if self.on_info:
             self.on_info(
                 f"ASR ready: {_resolve_asr_model_source(self.settings)} | "
-                f"{self.settings.source_language}->{self.settings.target_language} | "
+                f"{source_display}->{self.settings.target_language} | "
                 f"mic={self.input_device_name}"
             )
         if not self.translator.enabled:
@@ -1168,7 +1201,7 @@ def run_web_interface(settings: Settings, host: str, port: int, open_browser: bo
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Realtime meeting speech translation (local ASR + LLM translation)")
-    parser.add_argument("--source-language", default=None, help="ASR source language, e.g. zh, en")
+    parser.add_argument("--source-language", default=None, help="ASR source language, e.g. zh, en, auto")
     parser.add_argument("--target-language", default=None, help="Target translation language, e.g. en, zh")
     parser.add_argument("--asr-model", default=None, help="faster-whisper model name, e.g. small, medium")
     parser.add_argument("--input-device", default=None, help="Audio input device id or name, default auto")
@@ -1189,7 +1222,7 @@ def main() -> int:
     settings = Settings.load()
     args = parse_args()
     if args.source_language:
-        settings.source_language = args.source_language
+        settings.source_language = _normalize_source_language(args.source_language)
     if args.target_language:
         settings.target_language = args.target_language
     if args.asr_model:
