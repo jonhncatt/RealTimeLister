@@ -36,18 +36,17 @@
 ```powershell
 cd RealTimeLister
 python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-pip install -e .
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -e .
 ```
 
-安装后推荐命令：
+安装后推荐命令（不依赖 `Activate.ps1`）：
 
 ```powershell
-realtime-lister
+.\.venv\Scripts\python.exe -m realtime_lister.main
 ```
 
-`python -m realtime_lister.main` 也可以，这是标准 Python 模块运行方式；只是命令更长。
+如果你在公司 PowerShell 里不能执行 `Activate.ps1`，上面的方式可以直接用。
 
 ---
 
@@ -166,9 +165,8 @@ RT_SPEAKER_MATCH_THRESHOLD=0.12
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python scripts/download_faster_whisper_model.py --model small --output-dir C:/temp/faster-whisper-small
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe scripts/download_faster_whisper_model.py --model small --output-dir C:/temp/faster-whisper-small
 ```
 
 把目录拷到公司机器，例如：
@@ -195,7 +193,7 @@ RT_ASR_HF_LOCAL_ONLY=true
 ## 6. 运行
 
 ```powershell
-realtime-lister
+.\.venv\Scripts\python.exe -m realtime_lister.main
 ```
 
 默认地址：`http://127.0.0.1:8080`
@@ -203,13 +201,13 @@ realtime-lister
 终端模式：
 
 ```powershell
-realtime-lister --terminal
+.\.venv\Scripts\python.exe -m realtime_lister.main --terminal
 ```
 
 可选参数示例：
 
 ```powershell
-realtime-lister --source-language zh --target-language en --asr-model small --input-device auto --translation-model gpt-5.1 --host 127.0.0.1 --port 8080
+.\.venv\Scripts\python.exe -m realtime_lister.main --source-language zh --target-language en --asr-model small --input-device auto --translation-model gpt-5.1 --host 127.0.0.1 --port 8080
 ```
 
 ---
