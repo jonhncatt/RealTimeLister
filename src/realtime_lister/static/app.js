@@ -78,7 +78,8 @@ function applyState(state) {
   els.asrMode.textContent = `ASR · ${state.asrStrategyName || "Unknown Strategy"}`;
   els.asrSource.textContent = state.asrModelSource;
   els.asrBeam.textContent = String(state.asrBeamSize);
-  els.direction.textContent = `${state.sourceLanguage} → ${state.targetLanguage}`;
+  const currentSourceLanguage = current?.source_language || state.sourceLanguage;
+  els.direction.textContent = `${currentSourceLanguage} → ${state.targetLanguage}`;
   els.audioInputState.textContent = state.selectedInputDeviceLabel || state.selectedInputDevice;
   els.translatorState.textContent = state.translatorEnabled ? state.translationModel : "ASR only";
   els.speakerSplitState.textContent = state.speakerSplitEnabled
@@ -87,9 +88,10 @@ function applyState(state) {
   els.modelStatusText.textContent = state.asrModelStatusMessage;
   els.modelStatusCard.className = `status-card ${statusClass(state.asrModelStatusLevel)}`;
   const speakerLabel = current?.speaker_label || "";
+  const sourceLangLabel = (currentSourceLanguage || "auto").toUpperCase();
   els.sourceLabel.textContent = speakerLabel
-    ? `${state.sourceLanguage.toUpperCase()} Source · ${speakerLabel}`
-    : `${state.sourceLanguage.toUpperCase()} Source`;
+    ? `${sourceLangLabel} Source · ${speakerLabel}`
+    : `${sourceLangLabel} Source`;
   els.targetLabel.textContent = `${state.targetLanguage.toUpperCase()} Translation`;
   els.sourceText.textContent = current?.source_text || "Start the session to begin showing source speech.";
   els.targetText.textContent = current?.translated_text || "Live translation will appear here.";
