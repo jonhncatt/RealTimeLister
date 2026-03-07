@@ -33,28 +33,75 @@
             </div>
           </div>
 
+          <section class="panel guide-panel">
+            <div class="guide-topline">
+              <div>
+                <p class="section-title">Ready Check</p>
+                <p class="guide-subtitle" id="next-step-text">Checking setup...</p>
+              </div>
+              <p class="guide-plan" id="run-plan-text">Loading current plan...</p>
+            </div>
+            <div class="guide-grid">
+              <article class="guide-item" id="model-check-card">
+                <p class="guide-item-title">ASR Model</p>
+                <p class="guide-item-state" id="model-check-state">Checking...</p>
+                <p class="guide-item-detail" id="model-check-detail">-</p>
+              </article>
+              <article class="guide-item" id="mic-check-card">
+                <p class="guide-item-title">Microphone</p>
+                <p class="guide-item-state" id="mic-check-state">Checking...</p>
+                <p class="guide-item-detail" id="mic-check-detail">-</p>
+              </article>
+              <article class="guide-item" id="translator-check-card">
+                <p class="guide-item-title">Translator</p>
+                <p class="guide-item-state" id="translator-check-state">Checking...</p>
+                <p class="guide-item-detail" id="translator-check-detail">-</p>
+              </article>
+            </div>
+          </section>
+
           <div class="controls-grid">
             <section class="panel control-panel">
               <div class="section-title">Controls</div>
+              <div class="inline-grid">
+                <label class="select-block">
+                  <span class="select-label">Source Language</span>
+                  <select id="source-language-select" class="input-select">
+                    <option value="auto">Auto Detect</option>
+                  </select>
+                </label>
+                <label class="select-block">
+                  <span class="select-label">Target Language</span>
+                  <select id="target-language-select" class="input-select">
+                    <option value="en">English</option>
+                  </select>
+                </label>
+              </div>
               <label class="select-block">
                 <span class="select-label">Audio Input</span>
                 <select id="input-device-select" class="input-select">
                   <option value="auto">Auto</option>
                 </select>
               </label>
-              <label class="select-block">
-                <span class="select-label">Translation Prompt</span>
-                <textarea id="translation-prompt-input" class="prompt-input" rows="5"></textarea>
-              </label>
-              <p class="control-hint">
-                可用占位符：{source_language} {target_language} {speaker_label} {speaker_id} {glossary} {glossary_block}
-              </p>
               <div class="button-row">
                 <button id="start-btn" class="btn primary">Start Listening</button>
                 <button id="stop-btn" class="btn muted">Stop</button>
-                <button id="save-prompt-btn" class="btn muted">Save Prompt</button>
                 <button id="clear-btn" class="btn ghost">Clear History</button>
               </div>
+              <details class="advanced-panel" id="advanced-panel">
+                <summary>Advanced Settings</summary>
+                <label class="select-block">
+                  <span class="select-label">Translation Prompt</span>
+                  <textarea id="translation-prompt-input" class="prompt-input" rows="5"></textarea>
+                </label>
+                <p class="control-hint">
+                  可用占位符：{source_language} {target_language} {speaker_label} {speaker_id} {glossary} {glossary_block}
+                </p>
+                <div class="button-row advanced-actions">
+                  <button id="save-prompt-btn" class="btn muted">Save Prompt</button>
+                  <button id="reset-prompt-btn" class="btn ghost">Reset Default</button>
+                </div>
+              </details>
               <p class="control-note" id="control-note">Browser connected. Waiting for session start.</p>
             </section>
 

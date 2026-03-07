@@ -6,8 +6,22 @@ const els = {
   targetLabel: document.getElementById("target-label"),
   targetText: document.getElementById("target-text"),
   asrMode: document.getElementById("asr-mode"),
+  nextStepText: document.getElementById("next-step-text"),
+  runPlanText: document.getElementById("run-plan-text"),
+  modelCheckCard: document.getElementById("model-check-card"),
+  modelCheckState: document.getElementById("model-check-state"),
+  modelCheckDetail: document.getElementById("model-check-detail"),
+  micCheckCard: document.getElementById("mic-check-card"),
+  micCheckState: document.getElementById("mic-check-state"),
+  micCheckDetail: document.getElementById("mic-check-detail"),
+  translatorCheckCard: document.getElementById("translator-check-card"),
+  translatorCheckState: document.getElementById("translator-check-state"),
+  translatorCheckDetail: document.getElementById("translator-check-detail"),
   controlNote: document.getElementById("control-note"),
+  sourceLanguageSelect: document.getElementById("source-language-select"),
+  targetLanguageSelect: document.getElementById("target-language-select"),
   inputDeviceSelect: document.getElementById("input-device-select"),
+  advancedPanel: document.getElementById("advanced-panel"),
   translationPromptInput: document.getElementById("translation-prompt-input"),
   asrSource: document.getElementById("asr-source"),
   asrBeam: document.getElementById("asr-beam"),
@@ -22,6 +36,7 @@ const els = {
   startBtn: document.getElementById("start-btn"),
   stopBtn: document.getElementById("stop-btn"),
   savePromptBtn: document.getElementById("save-prompt-btn"),
+  resetPromptBtn: document.getElementById("reset-prompt-btn"),
   clearBtn: document.getElementById("clear-btn"),
 };
 
@@ -29,6 +44,17 @@ let currentState = null;
 let promptFocused = false;
 let promptDirty = false;
 els.savePromptBtn.disabled = true;
+els.resetPromptBtn.disabled = true;
+
+const LANGUAGE_OPTIONS = [
+  { value: "auto", label: "Auto Detect" },
+  { value: "zh", label: "Chinese" },
+  { value: "en", label: "English" },
+  { value: "ja", label: "Japanese" },
+  { value: "ko", label: "Korean" },
+  { value: "fr", label: "French" },
+  { value: "de", label: "German" },
+];
 
 function escapeHtml(text) {
   return text
@@ -68,6 +94,82 @@ function statusClass(level) {
   return `status-${level || "idle"}`;
 }
 
+function setupToneClass(tone) {
+  return `setup-tone-${tone || "warn"}`;
+}
+
+function languageDisplay(value) {
+  if (!value || value === "auto") {
+    return "Auto Detect";
+  }
+  const match = LANGUAGE_OPTIONS.find((item) => item.value === String(value).toLowerCase());
+  return match ? match.label : String(value).toUpperCase();
+}
+
+function renderLanguageOptions(selectEl, value, { allowAuto }) {
+  const baseOptions = LANGUAGE_OPTIONS.filter((item) => allowAuto || item.value !== "auto");
+  const normalized = String(value || (allowAuto ? "auto" : "en")).toLowerCase();
+  const options = [...baseOptions];
+  if (!options.some((item) => item.value === normalized)) {
+    options.push({ value: normalized, label: normalized.toUpperCase() });
+  }
+  selectEl.innerHTML = options
+    .map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`)
+    .join("");
+  selectEl.value = normalized;
+}
+
+function setGuideItem(card, stateEl, detailEl, tone, stateText, detailText) {
+  card.className = `guide-item ${setupToneClass(tone)}`;
+  stateEl.textContent = stateText;
+  detailEl.textContent = detailText;
+}
+
+function renderGuide(state, noInputs) {
+  const shortAsrSource = String(state.asrModelSource || "-").split(/[\\/]/).pop();
+  const sourcePlan = languageDisplay(state.sourceLanguage);
+  const targetPlan = languageDisplay(state.targetLanguage);
+  const translatorPlan = state.translatorEnabled ? state.translationModel : "ASR only";
+  els.runPlanText.textContent = `${sourcePlan} -> ${targetPlan} · ${shortAsrSource} · ${state.selectedInputDeviceLabel} · ${translatorPlan}`;
+
+  if (state.running) {
+    els.nextStepText.textContent = "Session is live. Speak near the microphone.";
+  } else if (state.loading) {
+    els.nextStepText.textContent = "Loading model and preparing microphone...";
+  } else if (state.asrModelStatusLevel === "error") {
+    els.nextStepText.textContent = "Next: fix the ASR model first. Set RT_ASR_MODEL_DIR or allow model download.";
+  } else if (noInputs) {
+    els.nextStepText.textContent = "Next: connect a microphone or choose another input device.";
+  } else if (!state.translatorEnabled) {
+    els.nextStepText.textContent = "Ready for ASR only. Add OPENAI_API_KEY if you also want translation.";
+  } else {
+    els.nextStepText.textContent = "Ready. Click Start Listening.";
+  }
+
+  const modelTone = state.asrModelStatusLevel === "error" ? "error" : state.asrModelStatusLevel === "ready" ? "ready" : "warn";
+  const modelState = modelTone === "ready" ? "Ready" : modelTone === "error" ? "Action Needed" : "Check";
+  setGuideItem(els.modelCheckCard, els.modelCheckState, els.modelCheckDetail, modelTone, modelState, state.asrModelStatusMessage);
+
+  const micTone = noInputs ? "error" : "ready";
+  const micState = noInputs ? "Missing" : "Ready";
+  const micDetail = state.inputDevicesError || state.selectedInputDeviceLabel || "No input device available.";
+  setGuideItem(els.micCheckCard, els.micCheckState, els.micCheckDetail, micTone, micState, micDetail);
+
+  const translatorTone = state.translatorEnabled ? "ready" : "warn";
+  const translatorState = state.translatorEnabled ? "Ready" : "Optional";
+  const translatorDetail = state.translatorEnabled
+    ? `Using ${state.translationModel}`
+    : "OPENAI_API_KEY not set. Start still works, but only ASR will run.";
+  setGuideItem(
+    els.translatorCheckCard,
+    els.translatorCheckState,
+    els.translatorCheckDetail,
+    translatorTone,
+    translatorState,
+    translatorDetail
+  );
+}
+
 function applyState(state) {
   currentState = state;
   const current = state.current;
@@ -103,17 +205,34 @@ function applyState(state) {
     state.lastInfo ||
     state.statusMessage;
 
+  if (state.loading) {
+    els.startBtn.textContent = "Loading...";
+  } else if (state.running) {
+    els.startBtn.textContent = "Listening...";
+  } else if (state.asrModelStatusLevel === "error") {
+    els.startBtn.textContent = "Model Not Ready";
+  } else if (noInputs) {
+    els.startBtn.textContent = "No Microphone";
+  } else {
+    els.startBtn.textContent = "Start Listening";
+  }
   els.startBtn.disabled = state.running || state.loading || noInputs || state.asrModelStatusLevel === "error";
   els.stopBtn.disabled = !state.running && !state.loading;
   els.clearBtn.disabled = state.running || state.loading ? false : state.history.length === 0;
+  els.sourceLanguageSelect.disabled = state.running || state.loading;
+  els.targetLanguageSelect.disabled = state.running || state.loading;
   els.inputDeviceSelect.disabled = state.running || state.loading || noInputs;
+  els.translationPromptInput.disabled = state.running || state.loading;
+  els.resetPromptBtn.disabled = state.running || state.loading;
   if (!promptFocused && !promptDirty) {
     els.translationPromptInput.value = state.translationPromptTemplate || "";
   }
-  els.savePromptBtn.disabled = !promptDirty;
+  els.savePromptBtn.disabled = state.running || state.loading || !promptDirty;
 
+  renderLanguageOptions(els.sourceLanguageSelect, state.sourceLanguage, { allowAuto: true });
+  renderLanguageOptions(els.targetLanguageSelect, state.targetLanguage, { allowAuto: false });
   renderInputDevices(state);
-
+  renderGuide(state, noInputs);
   renderHistory(state.history);
 }
 
@@ -196,8 +315,23 @@ function bindControls() {
     }
   });
 
+  const handleLanguageChange = async () => {
+    try {
+      await postJson("/api/languages", {
+        sourceLanguage: els.sourceLanguageSelect.value,
+        targetLanguage: els.targetLanguageSelect.value,
+      });
+    } catch (error) {
+      els.controlNote.textContent = error.message;
+    }
+  };
+
+  els.sourceLanguageSelect.addEventListener("change", handleLanguageChange);
+  els.targetLanguageSelect.addEventListener("change", handleLanguageChange);
+
   els.translationPromptInput.addEventListener("focus", () => {
     promptFocused = true;
+    els.advancedPanel.open = true;
   });
   els.translationPromptInput.addEventListener("blur", () => {
     promptFocused = false;
@@ -218,6 +352,18 @@ function bindControls() {
       promptDirty = false;
       els.savePromptBtn.disabled = true;
       els.controlNote.textContent = "Translation prompt saved.";
+    } catch (error) {
+      els.controlNote.textContent = error.message;
+    }
+  });
+
+  els.resetPromptBtn.addEventListener("click", async () => {
+    try {
+      await postJson("/api/translation-prompt", { template: "" });
+      promptDirty = false;
+      els.savePromptBtn.disabled = true;
+      els.translationPromptInput.value = currentState?.defaultTranslationPromptTemplate || "";
+      els.controlNote.textContent = "Translation prompt reset to default.";
     } catch (error) {
       els.controlNote.textContent = error.message;
     }

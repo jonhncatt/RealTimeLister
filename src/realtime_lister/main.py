@@ -85,6 +85,11 @@ def _normalize_source_language(raw: str, *, default: str = "auto") -> str:
     return value
 
 
+def _normalize_target_language(raw: str, *, default: str = "en") -> str:
+    value = (raw or "").strip().lower()
+    return value or default
+
+
 def _normalize_translation_prompt_template(raw: str) -> str:
     value = (raw or "").replace("\\n", "\n").strip()
     return value or DEFAULT_TRANSLATION_PROMPT_TEMPLATE
@@ -175,7 +180,7 @@ class Settings:
             device=_env("RT_ASR_DEVICE", "RT_DEVICE", default="auto"),
             compute_type=_env("RT_ASR_COMPUTE_TYPE", "RT_COMPUTE_TYPE", default="int8"),
             source_language=_normalize_source_language(_env("RT_SOURCE_LANGUAGE", default="auto")),
-            target_language=_env("RT_TARGET_LANGUAGE", default="en"),
+            target_language=_normalize_target_language(_env("RT_TARGET_LANGUAGE", default="en")),
             translation_model=_env("RT_TRANSLATION_MODEL", default="gpt-5.1"),
             translation_prompt_template=prompt_template,
             api_key=_env("OPENAI_API_KEY"),
@@ -879,6 +884,7 @@ class WebAppState:
                 "targetLanguage": self.settings.target_language,
                 "translationModel": self.settings.translation_model,
                 "translationPromptTemplate": self.settings.translation_prompt_template,
+                "defaultTranslationPromptTemplate": DEFAULT_TRANSLATION_PROMPT_TEMPLATE,
                 "translationPromptPlaceholders": list(TRANSLATION_PROMPT_PLACEHOLDERS),
                 "translatorEnabled": bool(self.settings.api_key),
                 "asrModelSource": asr_source,
@@ -1036,6 +1042,18 @@ class WebAppState:
         self._publish_snapshot()
         return True, "Translation prompt template updated."
 
+    def set_languages(self, source_language: str, target_language: str) -> tuple[bool, str]:
+        normalized_source = _normalize_source_language(source_language)
+        normalized_target = _normalize_target_language(target_language)
+        with self._lock:
+            if self._running or self._loading:
+                return False, "Stop the current session before changing the language direction."
+            self.settings.source_language = normalized_source
+            self.settings.target_language = normalized_target
+        source_label = "auto-detect" if normalized_source == "auto" else normalized_source
+        self._set_status("idle", f"Language direction set to {source_label} -> {normalized_target}.")
+        return True, "Language direction updated."
+
 
 class RealtimeHTTPServer(ThreadingHTTPServer):
     def __init__(self, server_address: tuple[str, int], handler_class: type[BaseHTTPRequestHandler], app_state: WebAppState):
@@ -1100,6 +1118,14 @@ def _make_handler(static_dir: Path) -> type[BaseHTTPRequestHandler]:
                 payload = self._read_json()
                 ok, message = self.server.app_state.set_translation_prompt_template(str(payload.get("template") or ""))
                 self._send_json({"ok": ok, "message": message}, status=HTTPStatus.OK if ok else HTTPStatus.BAD_REQUEST)
+                return
+            if path == "/api/languages":
+                payload = self._read_json()
+                ok, message = self.server.app_state.set_languages(
+                    str(payload.get("sourceLanguage") or "auto"),
+                    str(payload.get("targetLanguage") or "en"),
+                )
+                self._send_json({"ok": ok, "message": message}, status=HTTPStatus.OK if ok else HTTPStatus.CONFLICT)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -1224,7 +1250,7 @@ def main() -> int:
     if args.source_language:
         settings.source_language = _normalize_source_language(args.source_language)
     if args.target_language:
-        settings.target_language = args.target_language
+        settings.target_language = _normalize_target_language(args.target_language)
     if args.asr_model:
         settings.asr_model = args.asr_model
     if args.input_device:
