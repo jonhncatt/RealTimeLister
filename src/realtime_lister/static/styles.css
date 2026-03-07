@@ -183,6 +183,84 @@ h1 {
   gap: 18px;
 }
 
+.guide-panel {
+  border-radius: 22px;
+  padding: 18px;
+  background:
+    linear-gradient(135deg, rgba(240, 163, 91, 0.12), transparent 42%),
+    rgba(255, 255, 255, 0.03);
+}
+
+.guide-topline {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+}
+
+.guide-subtitle,
+.guide-plan {
+  margin: 10px 0 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.guide-plan {
+  max-width: 34ch;
+  text-align: right;
+}
+
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.guide-item {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.guide-item-title,
+.guide-item-state,
+.guide-item-detail {
+  margin: 0;
+}
+
+.guide-item-title {
+  color: var(--muted);
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.guide-item-state {
+  margin-top: 8px;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.guide-item-detail {
+  margin-top: 8px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.setup-tone-ready .guide-item-state {
+  color: var(--ok);
+}
+
+.setup-tone-warn .guide-item-state {
+  color: var(--warn);
+}
+
+.setup-tone-error .guide-item-state {
+  color: var(--danger);
+}
+
 .control-panel,
 .metrics-panel,
 .history-panel {
@@ -200,6 +278,12 @@ h1 {
 .select-block {
   display: block;
   margin-top: 14px;
+}
+
+.inline-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .select-label {
@@ -289,6 +373,35 @@ h1 {
   color: var(--muted);
   font-size: 0.84rem;
   line-height: 1.35;
+}
+
+.advanced-panel {
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 0 14px 14px;
+}
+
+.advanced-panel[open] {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.advanced-panel summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 14px 0;
+  color: var(--accent-soft);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.advanced-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-actions {
+  margin-top: 12px;
 }
 
 .metric-list {
@@ -427,6 +540,19 @@ h1 {
     grid-template-columns: 1fr;
   }
 
+  .guide-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-topline {
+    flex-direction: column;
+  }
+
+  .guide-plan {
+    max-width: none;
+    text-align: left;
+  }
+
   .history-panel {
     min-height: 40vh;
   }
@@ -451,6 +577,10 @@ h1 {
   }
 
   .metric-list {
+    grid-template-columns: 1fr;
+  }
+
+  .inline-grid {
     grid-template-columns: 1fr;
   }
 }

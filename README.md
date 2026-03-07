@@ -115,6 +115,12 @@ RT_TRANSLATION_PROMPT_TEMPLATE=You are a professional meeting interpreter.\nTran
 
 默认地址：`http://127.0.0.1:8080`
 
+首次打开页面时，建议按这个顺序：
+
+1. 先看 `Ready Check`
+2. 再选 `Source Language` / `Target Language` / `Audio Input`
+3. 最后点 `Start Listening`
+
 ### 4.2 终端模式
 
 ```powershell
@@ -153,12 +159,12 @@ Whisper 确实支持自动识别语言，所以现在支持：
 
 启动后先看：
 
+- `Ready Check`：直接告诉你模型、麦克风、翻译器是否就绪，以及下一步该做什么
 - `ASR Strategy`：当前到底走固定目录/离线缓存/联网自动
-- `ASR Readiness`：模型可用性，错误会直接写原因
 
 日常交互：
 
+- `Source Language` / `Target Language`：基础方向配置，停机时可直接改
 - `Audio Input`：可用麦克风列表
-- `Translation Prompt`：可改模板并点 `Save Prompt`
+- `Advanced Settings`：Prompt 模板等不常改的项都收在这里
 - `History`：显示 `Speaker N` 伪说话人标签
-
