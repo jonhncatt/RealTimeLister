@@ -45,15 +45,23 @@ ASR_MODEL_DOWNLOAD_PATTERNS = [
     "vocabulary.*",
 ]
 INTERACTIVE_CLI_HELP = (
-    "Commands:\n"
-    "  status    Show current ASR/runtime status\n"
-    "  setup     Detect or download the ASR model into ./model\n"
-    "  download  Re-download the ASR model into ./model\n"
-    "  start     Launch the local Web UI\n"
-    "  terminal  Start terminal transcription mode\n"
-    "  help      Show this help\n"
-    "  quit      Exit the CLI\n"
+    "COMMANDS\n"
+    "  status     Show current ASR/runtime status\n"
+    "  setup      Detect or download the ASR model into ./model\n"
+    "  download   Re-download the ASR model into ./model\n"
+    "  start      Launch the local Web UI\n"
+    "  terminal   Start terminal transcription mode\n"
+    "  help       Show this help\n"
+    "  quit       Exit the CLI\n"
 )
+CLI_BANNER = r"""
+   _____ _                   _      ____             __
+  / ___/(_)___ _____  ____ _/ /     / __ \___  _____/ /__
+  \__ \/ / __ `/ __ \/ __ `/ /_____/ / / / _ \/ ___/ //_/
+ ___/ / / /_/ / / / / /_/ / /_____/ /_/ /  __/ /__/ ,<
+/____/_/\__, /_/ /_/\__,_/_/     /_____/\___/\___/_/|_|
+       /____/
+"""
 DEFAULT_TRANSLATION_PROMPT_TEMPLATE = (
     "You are a professional meeting interpreter.\n"
     "Translate from {source_language} to {target_language}.\n"
@@ -1355,19 +1363,85 @@ def _prompt_yes_no(question: str, *, default: bool = True) -> bool:
         print("Please answer yes or no.")
 
 
+def _cli_supports_ansi() -> bool:
+    if os.getenv("NO_COLOR"):
+        return False
+    term = os.getenv("TERM", "").lower()
+    return sys.stdout.isatty() and term not in {"", "dumb"}
+
+
+def _cli_paint(text: str, *codes: str) -> str:
+    if not _cli_supports_ansi() or not codes:
+        return text
+    return f"\033[{';'.join(codes)}m{text}\033[0m"
+
+
+def _cli_rule(char: str = "-", width: int = 78) -> str:
+    return char * width
+
+
+def _display_path(raw_path: str | None) -> str:
+    if not raw_path:
+        return "(not set)"
+    path = Path(raw_path).expanduser()
+    try:
+        resolved = path.resolve()
+    except Exception:
+        return raw_path
+
+    try:
+        rel = resolved.relative_to(PROJECT_ROOT)
+        return "." if str(rel) == "." else f"./{rel}"
+    except ValueError:
+        pass
+
+    home = Path.home()
+    try:
+        rel_home = resolved.relative_to(home)
+        return f"~/{rel_home}"
+    except ValueError:
+        return str(resolved)
+
+
+def _compact_model_status(settings: "Settings", message: str) -> str:
+    if settings.asr_model_path and message.startswith("Using fixed local model directory:"):
+        return "ready :: fixed local directory"
+    if message.startswith("ASR will use model name"):
+        return "info :: model-name auto download"
+    if message.startswith("Offline cache-only mode is enabled"):
+        return "error :: offline cache missing model"
+    return message
+
+
+def _print_cli_banner() -> None:
+    print(_cli_paint(CLI_BANNER.rstrip(), "1", "33"))
+    print(_cli_paint("  RealTimeLister CLI  //  local ASR  //  operator console", "2"))
+    print(_cli_paint(_cli_rule("="), "2"))
+
+
+def _print_cli_block(title: str, rows: list[tuple[str, str]]) -> None:
+    print()
+    print(_cli_paint(title.upper(), "1", "33"))
+    print(_cli_paint(_cli_rule(), "2"))
+    for label, value in rows:
+        print(f"{_cli_paint(label + ':', '2'):24} {value}")
+
+
 def _print_cli_status(settings: Settings) -> None:
     model_status = _inspect_asr_model_status(settings)
     source_display = "auto-detect" if settings.source_language == "auto" else settings.source_language
-    print(
-        "\nStatus\n"
-        f"- Project root: {PROJECT_ROOT}\n"
-        f"- Default model root: {_repo_model_root()}\n"
-        f"- ASR model: {settings.asr_model}\n"
-        f"- ASR source: {settings.asr_model_path or '(not fixed yet)'}\n"
-        f"- ASR status: {model_status.message}\n"
-        f"- ASR cache root: {settings.asr_download_root or '(default)'}\n"
-        f"- Source -> Target: {source_display} -> {settings.target_language}\n"
-        f"- Translation: {'enabled' if settings.api_key else 'ASR only'}\n"
+    _print_cli_block(
+        "Status",
+        [
+            ("Project root", _display_path(str(PROJECT_ROOT))),
+            ("Model root", _display_path(str(_repo_model_root()))),
+            ("ASR model", settings.asr_model),
+            ("ASR source", _display_path(settings.asr_model_path) if settings.asr_model_path else "(not fixed yet)"),
+            ("ASR status", _compact_model_status(settings, model_status.message)),
+            ("ASR cache root", _display_path(settings.asr_download_root) if settings.asr_download_root else "(default)"),
+            ("Direction", f"{source_display} -> {settings.target_language}"),
+            ("Translation", "enabled" if settings.api_key else "ASR only"),
+        ],
     )
 
 
@@ -1376,23 +1450,26 @@ def _ensure_cli_asr_ready(settings: Settings, *, force_download: bool = False) -
     preferred_path = Path(settings.asr_model_path).expanduser() if settings.asr_model_path else _default_repo_model_dir(settings.asr_model)
     if not force_download and _is_complete_asr_model_dir(preferred_path):
         settings.asr_model_path = str(preferred_path)
-        print(f"[asr] Ready: {preferred_path}")
+        print(f"{_cli_paint('[asr]', '1', '32')} Ready: {_display_path(str(preferred_path))}")
         return True
 
     if settings.asr_model_path and not force_download:
         configured_path = Path(settings.asr_model_path).expanduser()
         if _is_complete_asr_model_dir(configured_path):
-            print(f"[asr] Ready: {configured_path}")
+            print(f"{_cli_paint('[asr]', '1', '32')} Ready: {_display_path(str(configured_path))}")
             return True
         if configured_path.exists():
             missing = _missing_asr_model_files(configured_path)
-            print(f"[asr] Configured model directory is incomplete: {configured_path} (missing: {', '.join(missing)})")
+            print(
+                f"{_cli_paint('[asr]', '1', '31')} Configured model directory is incomplete: "
+                f"{_display_path(str(configured_path))} (missing: {', '.join(missing)})"
+            )
         else:
-            print(f"[asr] Configured model directory not found: {configured_path}")
+            print(f"{_cli_paint('[asr]', '1', '31')} Configured model directory not found: {_display_path(str(configured_path))}")
 
     if not force_download:
-        print(f"[asr] No ready local ASR model found for '{settings.asr_model}'.")
-        print(f"[asr] Default download path: {_default_repo_model_dir(settings.asr_model)}")
+        print(f"{_cli_paint('[asr]', '1', '33')} No ready local ASR model found for '{settings.asr_model}'.")
+        print(f"{_cli_paint('[asr]', '1', '33')} Default download path: {_display_path(str(_default_repo_model_dir(settings.asr_model)))}")
         if not _prompt_yes_no("Download the ASR model now?", default=True):
             return False
 
@@ -1405,21 +1482,24 @@ def _ensure_cli_asr_ready(settings: Settings, *, force_download: bool = False) -
     try:
         downloaded_dir = _download_asr_model_to_dir(settings, download_target)
     except Exception as exc:
-        print(f"[asr] Download failed: {exc}")
+        print(f"{_cli_paint('[asr]', '1', '31')} Download failed: {exc}")
         return False
 
     settings.asr_model_path = str(downloaded_dir)
     settings.asr_local_files_only = False
-    print(f"[asr] Download complete. Using local model directory: {downloaded_dir}")
+    print(f"{_cli_paint('[asr]', '1', '32')} Download complete. Using local model directory: {_display_path(str(downloaded_dir))}")
     return True
 
 
 def run_interactive_cli(settings: Settings, host: str, port: int, open_browser: bool) -> int:
-    print(
-        "RealTimeLister CLI\n"
-        f"- Project root: {PROJECT_ROOT}\n"
-        f"- Model root: {_repo_model_root()}\n"
-        "Type help for commands.\n"
+    _print_cli_banner()
+    _print_cli_block(
+        "Boot",
+        [
+            ("Project root", _display_path(str(PROJECT_ROOT))),
+            ("Model root", _display_path(str(_repo_model_root()))),
+            ("Hint", "Type help for commands"),
+        ],
     )
     _print_cli_status(settings)
     ready = _ensure_cli_asr_ready(settings)
@@ -1431,7 +1511,7 @@ def run_interactive_cli(settings: Settings, host: str, port: int, open_browser: 
 
     while True:
         try:
-            raw = input("realtime-lister> ").strip()
+            raw = input(_cli_paint("rtl> ", "1", "33")).strip()
         except EOFError:
             print()
             return 0
