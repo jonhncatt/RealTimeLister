@@ -51,6 +51,7 @@ INTERACTIVE_CLI_HELP = (
     "  download   Re-download the ASR model into ./model\n"
     "  start      Launch the local Web UI\n"
     "  terminal   Start terminal transcription mode\n"
+    "  panel      Open the retro control panel\n"
     "  help       Show this help\n"
     "  quit       Exit the CLI\n"
 )
@@ -76,6 +77,23 @@ TRANSLATION_PROMPT_PLACEHOLDERS = (
     "speaker_id",
     "glossary",
     "glossary_block",
+)
+CLI_SOURCE_LANGUAGE_OPTIONS = (
+    ("auto", "Auto Detect"),
+    ("zh", "Chinese"),
+    ("en", "English"),
+    ("ja", "Japanese"),
+    ("ko", "Korean"),
+    ("fr", "French"),
+    ("de", "German"),
+)
+CLI_TARGET_LANGUAGE_OPTIONS = (
+    ("en", "English"),
+    ("zh", "Chinese"),
+    ("ja", "Japanese"),
+    ("ko", "Korean"),
+    ("fr", "French"),
+    ("de", "German"),
 )
 
 
@@ -1366,8 +1384,7 @@ def _prompt_yes_no(question: str, *, default: bool = True) -> bool:
 def _cli_supports_ansi() -> bool:
     if os.getenv("NO_COLOR"):
         return False
-    term = os.getenv("TERM", "").lower()
-    return sys.stdout.isatty() and term not in {"", "dumb"}
+    return sys.stdout.isatty()
 
 
 def _cli_paint(text: str, *codes: str) -> str:
@@ -1411,6 +1428,220 @@ def _compact_model_status(settings: "Settings", message: str) -> str:
     if message.startswith("Offline cache-only mode is enabled"):
         return "error :: offline cache missing model"
     return message
+
+
+def _language_label(code: str, *, allow_auto: bool = True) -> str:
+    options = CLI_SOURCE_LANGUAGE_OPTIONS if allow_auto else CLI_TARGET_LANGUAGE_OPTIONS
+    for value, label in options:
+        if value == code:
+            return label
+    return code.upper()
+
+
+def _truncate_cli_text(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    return f"{text[: width - 3]}..."
+
+
+def _clear_cli_screen() -> None:
+    if _cli_supports_ansi():
+        print("\033[2J\033[H", end="")
+
+
+def _read_cli_keypress() -> str:
+    if os.name == "nt":
+        import msvcrt
+
+        raw = msvcrt.getwch()
+        if raw == "\x03":
+            raise KeyboardInterrupt
+        if raw in {"\r", "\n"}:
+            return "enter"
+        if raw in {"\x00", "\xe0"}:
+            follow = msvcrt.getwch()
+            return {
+                "H": "up",
+                "P": "down",
+                "K": "left",
+                "M": "right",
+            }.get(follow, "")
+        return {
+            "k": "up",
+            "j": "down",
+            "h": "left",
+            "l": "right",
+            "w": "web",
+            "t": "terminal",
+            "q": "quit",
+            "\x1b": "escape",
+        }.get(raw.lower(), raw.lower())
+
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        raw = os.read(fd, 1).decode("utf-8", errors="ignore")
+        if raw == "\x03":
+            raise KeyboardInterrupt
+        if raw in {"\r", "\n"}:
+            return "enter"
+        if raw == "\x1b":
+            next_byte = os.read(fd, 1).decode("utf-8", errors="ignore")
+            if next_byte == "[":
+                final = os.read(fd, 1).decode("utf-8", errors="ignore")
+                return {
+                    "A": "up",
+                    "B": "down",
+                    "C": "right",
+                    "D": "left",
+                }.get(final, "escape")
+            return "escape"
+        return {
+            "k": "up",
+            "j": "down",
+            "h": "left",
+            "l": "right",
+            "w": "web",
+            "t": "terminal",
+            "q": "quit",
+        }.get(raw.lower(), raw.lower())
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _cycle_value(options: list[str], current: str, step: int) -> str:
+    if not options:
+        return current
+    try:
+        index = options.index(current)
+    except ValueError:
+        index = 0
+    return options[(index + step) % len(options)]
+
+
+def _get_cli_input_device_options(settings: "Settings") -> list[tuple[str, str]]:
+    devices, default_input_id, input_error = _query_input_devices()
+    options: list[tuple[str, str]] = []
+    auto_label = "Auto"
+    if default_input_id is not None:
+        for item in devices:
+            if item["id"] == default_input_id:
+                auto_label = f"Auto ({item['name']})"
+                break
+    elif input_error:
+        auto_label = "Auto (unavailable)"
+    options.append(("auto", auto_label))
+
+    for item in devices:
+        label = str(item["name"])
+        if item["isDefault"]:
+            label = f"{label} [default]"
+        options.append((str(item["id"]), label))
+
+    selected = (settings.input_device or "auto").strip() or "auto"
+    if selected != "auto" and not any(value == selected for value, _ in options):
+        options.append((selected, selected))
+    return options
+
+
+def _render_cli_control_panel(settings: "Settings", selected_index: int, footer: str) -> None:
+    model_status = _inspect_asr_model_status(settings)
+    direction_value = f"{_language_label(settings.source_language)} -> {_language_label(settings.target_language, allow_auto=False)}"
+    device_options = _get_cli_input_device_options(settings)
+    mic_label = next((label for value, label in device_options if value == settings.input_device), None)
+    if not mic_label:
+        mic_label = next((label for value, label in device_options if value == "auto"), "Auto")
+
+    rows = [
+        ("Direction", direction_value, "Common translation direction"),
+        ("Mic", mic_label, "Active audio input"),
+    ]
+
+    _clear_cli_screen()
+    _print_cli_banner()
+    print()
+    print(_cli_paint("CONTROL PANEL", "1", "33"))
+    print(_cli_paint(_cli_rule(), "2"))
+    print("  Use arrow keys or H/J/K/L to move. Left/Right changes values.")
+    print("  Press W to launch Web UI, T for terminal mode, Enter for shell, Q to quit.")
+    print()
+    print("+------------------------------------------------------------------------------+")
+    for index, (label, value, hint) in enumerate(rows):
+        pointer = ">" if index == selected_index else " "
+        label_text = f"{pointer} {label:<11}"
+        value_text = f"[ {_truncate_cli_text(value, 28):<28} ]"
+        hint_text = _truncate_cli_text(hint, 22)
+        line = f"| {label_text} {value_text} {_truncate_cli_text(hint_text, 22):<22} |"
+        if index == selected_index:
+            line = _cli_paint(line, "1", "33")
+        print(line)
+    print("+------------------------------------------------------------------------------+")
+    print(f"  Translator : {'enabled' if settings.api_key else 'ASR only'}")
+    print(f"  ASR status  : {_compact_model_status(settings, model_status.message)}")
+    print(f"  Model       : {_display_path(settings.asr_model_path) if settings.asr_model_path else settings.asr_model}")
+    print()
+    print(_cli_paint(f"  {footer}", "2"))
+
+
+def _run_cli_control_panel(settings: "Settings") -> str:
+    selected_index = 0
+    footer = "Ready. Tune direction or microphone before launch."
+    direction_options = [
+        (source, target)
+        for source, _ in CLI_SOURCE_LANGUAGE_OPTIONS
+        for target, _ in CLI_TARGET_LANGUAGE_OPTIONS
+    ]
+    device_options = _get_cli_input_device_options(settings)
+
+    while True:
+        _render_cli_control_panel(settings, selected_index, footer)
+        key = _read_cli_keypress()
+        if key == "up":
+            selected_index = (selected_index - 1) % 2
+            footer = "Selection moved."
+            continue
+        if key == "down":
+            selected_index = (selected_index + 1) % 2
+            footer = "Selection moved."
+            continue
+        if key in {"left", "right"}:
+            step = -1 if key == "left" else 1
+            if selected_index == 0:
+                current = (settings.source_language, settings.target_language)
+                try:
+                    idx = direction_options.index(current)
+                except ValueError:
+                    idx = 0
+                new_source, new_target = direction_options[(idx + step) % len(direction_options)]
+                settings.source_language = new_source
+                settings.target_language = new_target
+                footer = f"Direction set to {_language_label(new_source)} -> {_language_label(new_target, allow_auto=False)}."
+            else:
+                option_values = [value for value, _ in device_options]
+                settings.input_device = _cycle_value(option_values, settings.input_device or "auto", step)
+                selected_label = next((label for value, label in device_options if value == settings.input_device), settings.input_device)
+                footer = f"Microphone set to {selected_label}."
+            continue
+        if key == "enter":
+            _clear_cli_screen()
+            return "shell"
+        if key == "web":
+            _clear_cli_screen()
+            return "web"
+        if key == "terminal":
+            _clear_cli_screen()
+            return "terminal"
+        if key in {"quit", "escape"}:
+            _clear_cli_screen()
+            return "quit"
 
 
 def _print_cli_banner() -> None:
@@ -1503,7 +1734,32 @@ def run_interactive_cli(settings: Settings, host: str, port: int, open_browser: 
     )
     _print_cli_status(settings)
     ready = _ensure_cli_asr_ready(settings)
-    if ready and _prompt_yes_no("ASR is ready. Launch the Web UI now?", default=True):
+    if ready and _cli_supports_ansi():
+        try:
+            startup_action = _run_cli_control_panel(settings)
+        except Exception:
+            startup_action = ""
+        if startup_action == "quit":
+            return 0
+        if startup_action == "web":
+            try:
+                run_web_interface(settings, host, port, open_browser=open_browser)
+            except Exception as exc:
+                print(f"[web] Failed to start: {exc}")
+        elif startup_action == "terminal":
+            try:
+                run_terminal_session(settings)
+            except Exception as exc:
+                print(f"[terminal] Failed to start: {exc}")
+        elif startup_action == "shell":
+            _print_cli_banner()
+            _print_cli_status(settings)
+        elif _prompt_yes_no("ASR is ready. Launch the Web UI now?", default=True):
+            try:
+                run_web_interface(settings, host, port, open_browser=open_browser)
+            except Exception as exc:
+                print(f"[web] Failed to start: {exc}")
+    elif ready and _prompt_yes_no("ASR is ready. Launch the Web UI now?", default=True):
         try:
             run_web_interface(settings, host, port, open_browser=open_browser)
         except Exception as exc:
@@ -1527,6 +1783,31 @@ def run_interactive_cli(settings: Settings, host: str, port: int, open_browser: 
             return 0
         if command == "help":
             print(INTERACTIVE_CLI_HELP)
+            continue
+        if command == "panel":
+            if _cli_supports_ansi():
+                try:
+                    action = _run_cli_control_panel(settings)
+                except Exception:
+                    print("Retro control panel is unavailable in this terminal.")
+                    continue
+                if action == "quit":
+                    return 0
+                if action == "web":
+                    try:
+                        run_web_interface(settings, host, port, open_browser=open_browser)
+                    except Exception as exc:
+                        print(f"[web] Failed to start: {exc}")
+                elif action == "terminal":
+                    try:
+                        run_terminal_session(settings)
+                    except Exception as exc:
+                        print(f"[terminal] Failed to start: {exc}")
+                else:
+                    _print_cli_banner()
+                    _print_cli_status(settings)
+            else:
+                print("Retro control panel requires an ANSI-capable TTY.")
             continue
         if command == "status":
             _print_cli_status(settings)
