@@ -9,6 +9,7 @@ description = "Realtime meeting translation using local ASR and company LLM tran
 requires-python = ">=3.10"
 
 [project.scripts]
+realtime = "realtime_lister.main:main"
 realtime-lister = "realtime_lister.main:main"
 
 [tool.setuptools]

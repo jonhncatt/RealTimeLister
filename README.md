@@ -10,28 +10,37 @@
 
 ## 0. 推荐流程（按这个顺序）
 
-1. 先准备 ASR 模型（外网机器）
-2. 再安装项目（公司机器）
-3. 启动前先配置 `.env`
-4. 最后运行与日常使用
+1. 安装项目
+2. 直接运行 CLI
+3. 首次启动时让 CLI 自动检查/下载 ASR 模型
+4. 如果要翻译，再补 `.env` 里的 OpenAI 配置
+5. 用 `start` 或 `terminal` 开始使用
 
 ---
 
-## 1. 先准备 ASR 模型（外网机器）
+## 1. ASR 模型默认放在仓库内 `model/`
 
-> 如果公司机器不能访问 Hugging Face，先在外网机器下载模型再拷贝到公司机器。
+默认目录：
+
+```text
+RealTimeLister/model/faster-whisper-small
+```
+
+不需要先下载到别的临时目录，再手工 copy 到其他地方。CLI 首次运行会优先检查这个目录；如果没有模型，会直接询问是否下载到这里。
+
+如果你在外网机器上手动下载，也建议直接下到仓库里的 `model/`：
 
 ```powershell
 cd RealTimeLister
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe scripts/download_faster_whisper_model.py --model small --output-dir C:/temp/faster-whisper-small
+.\.venv\Scripts\python.exe scripts/download_faster_whisper_model.py --model small --output-dir .\model\faster-whisper-small
 ```
 
-把下载目录拷到公司机器，例如：
+如果公司机器完全离线，把整个仓库带过去，或者至少把这个目录带过去：
 
 ```text
-C:/models/faster-whisper-small
+RealTimeLister/model/faster-whisper-small
 ```
 
 目录至少包含：
@@ -42,7 +51,7 @@ C:/models/faster-whisper-small
 
 ---
 
-## 2. 再安装项目（公司机器）
+## 2. 安装项目
 
 ```powershell
 cd RealTimeLister
@@ -53,9 +62,11 @@ python -m venv .venv
 
 说明：全流程都可以不激活虚拟环境，不依赖 `Activate.ps1`。
 
+完成这一步之后，就可以直接用命令 `realtime` 启动。
+
 ---
 
-## 3. 启动前先配置 `.env`
+## 3. 如果要翻译，再配置 `.env`
 
 ### 3.1 先复制模板（只选一个）
 
@@ -77,6 +88,8 @@ RT_TARGET_LANGUAGE=en
 RT_AUDIO_INPUT_DEVICE=auto
 ```
 
+如果你只想先验证本地 ASR，可以先不填 `OPENAI_API_KEY`。此时会以 `ASR only` 模式运行。
+
 ### 3.3 翻译 Prompt 模板（可选）
 
 ```env
@@ -97,40 +110,60 @@ RT_TRANSLATION_PROMPT_TEMPLATE=You are a professional meeting interpreter.\nTran
 1. `RT_ASR_MODEL_DIR` 有值：
 固定目录模式（最高优先级），不走 HF 自动下载。
 
-2. 否则，`RT_ASR_HF_LOCAL_ONLY=true`：
+2. 否则，如果仓库里的默认目录存在完整模型，例如 `model/faster-whisper-small`：
+自动按固定目录模式使用它。
+
+3. 否则，`RT_ASR_HF_LOCAL_ONLY=true`：
 离线缓存模式，只读缓存，不下载。
 
-3. 否则：
+4. 否则：
 模型名模式（`RT_ASR_MODEL_NAME`），先读缓存，缺失时再尝试下载。
 
 ---
 
-## 4. 最后运行与用法
+## 4. 运行与用法
 
-### 4.1 Web UI（默认）
+### 4.1 交互式 CLI（默认入口）
 
 ```powershell
-.\.venv\Scripts\python.exe -m realtime_lister.main
+realtime
+```
+
+首次运行时会进入 CLI，流程是：
+
+1. 自动检查仓库内 `model/` 里有没有 ASR 模型
+2. 如果没有，询问是否现在下载
+3. 确认下载目录，默认就是仓库内 `model/faster-whisper-small`
+4. 下载完成后，询问是否立即启动 Web UI
+
+进入 CLI 后可用命令：
+
+- `help`
+- `status`
+- `setup`
+- `download`
+- `start`
+- `terminal`
+- `quit`
+
+### 4.2 直接启动 Web UI
+
+```powershell
+realtime --web
 ```
 
 默认地址：`http://127.0.0.1:8080`
 
-首次打开页面时，建议按这个顺序：
-
-1. 先看 `Ready Check`
-2. 再选 `Source Language` / `Target Language` / `Audio Input`
-3. 最后点 `Start Listening`
-
-### 4.2 终端模式
+### 4.3 终端模式
 
 ```powershell
-.\.venv\Scripts\python.exe -m realtime_lister.main --terminal
+realtime --terminal
 ```
 
-### 4.3 常用参数
+### 4.4 常用参数
 
 ```powershell
-.\.venv\Scripts\python.exe -m realtime_lister.main --source-language auto --target-language en --asr-model small --input-device auto --translation-model gpt-5.1 --host 127.0.0.1 --port 8080
+realtime --interactive --source-language auto --target-language en --asr-model small --input-device auto --translation-model gpt-5.1 --host 127.0.0.1 --port 8080
 ```
 
 ---

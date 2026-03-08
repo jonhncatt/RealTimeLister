@@ -18,6 +18,7 @@ from typing import Any, Callable, Iterable
 from urllib.parse import urlparse, urlunparse
 import webbrowser
 
+from huggingface_hub import snapshot_download
 import numpy as np
 import sounddevice as sd
 import webrtcvad
@@ -32,6 +33,27 @@ FRAME_MS = 30
 FRAME_SAMPLES = int(SAMPLE_RATE * FRAME_MS / 1000)
 FRAME_BYTES = FRAME_SAMPLES * 2
 STATIC_DIR = Path(__file__).with_name("static")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_MODEL_ROOT = PROJECT_ROOT / "model"
+DEFAULT_MODEL_CACHE_ROOT = DEFAULT_MODEL_ROOT / "cache"
+ASR_MODEL_REQUIRED_FILES = ("config.json", "model.bin", "tokenizer.json")
+ASR_MODEL_DOWNLOAD_PATTERNS = [
+    "config.json",
+    "preprocessor_config.json",
+    "model.bin",
+    "tokenizer.json",
+    "vocabulary.*",
+]
+INTERACTIVE_CLI_HELP = (
+    "Commands:\n"
+    "  status    Show current ASR/runtime status\n"
+    "  setup     Detect or download the ASR model into ./model\n"
+    "  download  Re-download the ASR model into ./model\n"
+    "  start     Launch the local Web UI\n"
+    "  terminal  Start terminal transcription mode\n"
+    "  help      Show this help\n"
+    "  quit      Exit the CLI\n"
+)
 DEFAULT_TRANSLATION_PROMPT_TEMPLATE = (
     "You are a professional meeting interpreter.\n"
     "Translate from {source_language} to {target_language}.\n"
@@ -128,6 +150,66 @@ def _validate_translation_prompt_template(template: str) -> tuple[bool, str | No
     return True, None
 
 
+def _repo_model_root() -> Path:
+    return DEFAULT_MODEL_ROOT
+
+
+def _repo_model_cache_root() -> Path:
+    return DEFAULT_MODEL_CACHE_ROOT
+
+
+def _resolve_hf_repo_id(model: str) -> str:
+    candidate = (model or "small").strip()
+    if "/" in candidate:
+        return candidate
+    return f"Systran/faster-whisper-{candidate}"
+
+
+def _default_model_dir_name(model: str) -> str:
+    repo_id = _resolve_hf_repo_id(model)
+    return repo_id.rsplit("/", 1)[-1]
+
+
+def _default_repo_model_dir(model: str) -> Path:
+    return _repo_model_root() / _default_model_dir_name(model)
+
+
+def _missing_asr_model_files(path: Path) -> list[str]:
+    return [name for name in ASR_MODEL_REQUIRED_FILES if not (path / name).exists()]
+
+
+def _is_complete_asr_model_dir(path: Path) -> bool:
+    return path.exists() and not _missing_asr_model_files(path)
+
+
+def _resolve_local_model_hint(model: str, configured_path: str | None) -> str | None:
+    if configured_path:
+        return str(Path(configured_path).expanduser())
+    default_path = _default_repo_model_dir(model)
+    if _is_complete_asr_model_dir(default_path):
+        return str(default_path)
+    return None
+
+
+def _download_asr_model_to_dir(settings: "Settings", output_dir: Path) -> Path:
+    target_dir = output_dir.expanduser().resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    _configure_network_env(settings)
+    repo_id = _resolve_hf_repo_id(settings.asr_model)
+    print(f"[asr] Downloading {repo_id} -> {target_dir}")
+    snapshot_download(
+        repo_id=repo_id,
+        local_dir=str(target_dir),
+        local_dir_use_symlinks=False,
+        allow_patterns=ASR_MODEL_DOWNLOAD_PATTERNS,
+        token=settings.hf_token,
+    )
+    missing = _missing_asr_model_files(target_dir)
+    if missing:
+        raise RuntimeError(f"Downloaded model directory is incomplete: missing {', '.join(missing)}")
+    return target_dir
+
+
 @dataclass(slots=True)
 class Settings:
     asr_model: str
@@ -160,8 +242,10 @@ class Settings:
         load_dotenv()
         base_url = _env("OFFICETOOL_OPENAI_BASE_URL", "OFFCIATOOL_OPENAI_BASE_URL", "OPENAI_BASE_URL")
         ca_cert = _env("OFFICETOOL_CA_CERT_PATH", "OFFCIATOOL_CA_CERT_PATH", "SSL_CERT_FILE")
+        asr_model = _env("RT_ASR_MODEL_NAME", "RT_WHISPER_MODEL", default="small")
         asr_model_path = _env("RT_ASR_MODEL_DIR", "RT_WHISPER_MODEL_PATH")
         asr_download_root = _env("RT_ASR_HF_CACHE_DIR", "RT_HF_CACHE_DIR")
+        local_model_hint = _resolve_local_model_hint(asr_model, asr_model_path)
         prompt_template = _normalize_translation_prompt_template(_env("RT_TRANSLATION_PROMPT_TEMPLATE", default=""))
         prompt_ok, prompt_error = _validate_translation_prompt_template(prompt_template)
         if not prompt_ok:
@@ -171,9 +255,9 @@ class Settings:
             )
             prompt_template = DEFAULT_TRANSLATION_PROMPT_TEMPLATE
         return cls(
-            asr_model=_env("RT_ASR_MODEL_NAME", "RT_WHISPER_MODEL", default="small"),
-            asr_model_path=str(Path(asr_model_path).expanduser()) if asr_model_path else None,
-            asr_download_root=str(Path(asr_download_root).expanduser()) if asr_download_root else None,
+            asr_model=asr_model,
+            asr_model_path=local_model_hint,
+            asr_download_root=str(Path(asr_download_root).expanduser()) if asr_download_root else str(_repo_model_cache_root()),
             asr_local_files_only=_truthy(_env("RT_ASR_HF_LOCAL_ONLY", "RT_HF_LOCAL_FILES_ONLY", default="false")),
             asr_beam_size=max(1, int(_env("RT_ASR_BEAM_SIZE", "RT_BEAM_SIZE", default="1"))),
             input_device=_env("RT_AUDIO_INPUT_DEVICE", default="auto"),
@@ -324,8 +408,7 @@ def _inspect_asr_model_status(settings: Settings) -> AsrModelStatus:
                 level="error",
                 message=f"Configured local model directory does not exist: {model_path}",
             )
-        required = ["config.json", "model.bin", "tokenizer.json"]
-        missing = [name for name in required if not (model_path / name).exists()]
+        missing = _missing_asr_model_files(model_path)
         if missing:
             return AsrModelStatus(
                 level="error",
@@ -1225,49 +1308,7 @@ def run_web_interface(settings: Settings, host: str, port: int, open_browser: bo
     return 0
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Realtime meeting speech translation (local ASR + LLM translation)")
-    parser.add_argument("--source-language", default=None, help="ASR source language, e.g. zh, en, auto")
-    parser.add_argument("--target-language", default=None, help="Target translation language, e.g. en, zh")
-    parser.add_argument("--asr-model", default=None, help="faster-whisper model name, e.g. small, medium")
-    parser.add_argument("--input-device", default=None, help="Audio input device id or name, default auto")
-    parser.add_argument("--translation-model", default=None, help="LLM model for translation, e.g. gpt-5.1")
-    parser.add_argument(
-        "--translation-prompt-template",
-        default=None,
-        help="Custom translation system prompt template. Supports placeholders like {source_language}, {target_language}, {speaker_label}.",
-    )
-    parser.add_argument("--terminal", action="store_true", help="Run in terminal mode instead of the local web UI")
-    parser.add_argument("--host", default="127.0.0.1", help="Host for the local web UI, default 127.0.0.1")
-    parser.add_argument("--port", type=int, default=8080, help="Port for the local web UI, default 8080")
-    parser.add_argument("--no-browser", action="store_true", help="Do not open a browser automatically in web mode")
-    return parser.parse_args()
-
-
-def main() -> int:
-    settings = Settings.load()
-    args = parse_args()
-    if args.source_language:
-        settings.source_language = _normalize_source_language(args.source_language)
-    if args.target_language:
-        settings.target_language = _normalize_target_language(args.target_language)
-    if args.asr_model:
-        settings.asr_model = args.asr_model
-    if args.input_device:
-        settings.input_device = args.input_device
-    if args.translation_model:
-        settings.translation_model = args.translation_model
-    if args.translation_prompt_template is not None:
-        candidate = _normalize_translation_prompt_template(args.translation_prompt_template)
-        ok, error = _validate_translation_prompt_template(candidate)
-        if not ok:
-            print(error or "Invalid translation prompt template.", file=sys.stderr)
-            return 2
-        settings.translation_prompt_template = candidate
-
-    if not args.terminal:
-        return run_web_interface(settings, args.host, args.port, open_browser=not args.no_browser)
-
+def run_terminal_session(settings: Settings) -> int:
     runner = RealtimeMeetingTranslator(settings)
 
     def _handle_signal(signum, frame):  # noqa: ANN001
@@ -1282,6 +1323,216 @@ def main() -> int:
     except KeyboardInterrupt:
         runner.stop()
     return 0
+
+
+def _prompt_text(label: str, *, default: str | None = None) -> str:
+    suffix = f" [{default}]" if default else ""
+    while True:
+        try:
+            raw = input(f"{label}{suffix}: ").strip()
+        except EOFError:
+            print()
+            return default or ""
+        except KeyboardInterrupt:
+            print()
+            raise
+        if raw:
+            return raw
+        if default is not None:
+            return default
+
+
+def _prompt_yes_no(question: str, *, default: bool = True) -> bool:
+    suffix = " [Y/n]" if default else " [y/N]"
+    while True:
+        answer = _prompt_text(f"{question}{suffix}", default="").lower()
+        if not answer:
+            return default
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+        print("Please answer yes or no.")
+
+
+def _print_cli_status(settings: Settings) -> None:
+    model_status = _inspect_asr_model_status(settings)
+    source_display = "auto-detect" if settings.source_language == "auto" else settings.source_language
+    print(
+        "\nStatus\n"
+        f"- Project root: {PROJECT_ROOT}\n"
+        f"- Default model root: {_repo_model_root()}\n"
+        f"- ASR model: {settings.asr_model}\n"
+        f"- ASR source: {settings.asr_model_path or '(not fixed yet)'}\n"
+        f"- ASR status: {model_status.message}\n"
+        f"- ASR cache root: {settings.asr_download_root or '(default)'}\n"
+        f"- Source -> Target: {source_display} -> {settings.target_language}\n"
+        f"- Translation: {'enabled' if settings.api_key else 'ASR only'}\n"
+    )
+
+
+def _ensure_cli_asr_ready(settings: Settings, *, force_download: bool = False) -> bool:
+    default_download_path = _default_repo_model_dir(settings.asr_model)
+    preferred_path = Path(settings.asr_model_path).expanduser() if settings.asr_model_path else _default_repo_model_dir(settings.asr_model)
+    if not force_download and _is_complete_asr_model_dir(preferred_path):
+        settings.asr_model_path = str(preferred_path)
+        print(f"[asr] Ready: {preferred_path}")
+        return True
+
+    if settings.asr_model_path and not force_download:
+        configured_path = Path(settings.asr_model_path).expanduser()
+        if _is_complete_asr_model_dir(configured_path):
+            print(f"[asr] Ready: {configured_path}")
+            return True
+        if configured_path.exists():
+            missing = _missing_asr_model_files(configured_path)
+            print(f"[asr] Configured model directory is incomplete: {configured_path} (missing: {', '.join(missing)})")
+        else:
+            print(f"[asr] Configured model directory not found: {configured_path}")
+
+    if not force_download:
+        print(f"[asr] No ready local ASR model found for '{settings.asr_model}'.")
+        print(f"[asr] Default download path: {_default_repo_model_dir(settings.asr_model)}")
+        if not _prompt_yes_no("Download the ASR model now?", default=True):
+            return False
+
+    download_target = Path(
+        _prompt_text(
+            "ASR model directory",
+            default=str(default_download_path),
+        )
+    ).expanduser()
+    try:
+        downloaded_dir = _download_asr_model_to_dir(settings, download_target)
+    except Exception as exc:
+        print(f"[asr] Download failed: {exc}")
+        return False
+
+    settings.asr_model_path = str(downloaded_dir)
+    settings.asr_local_files_only = False
+    print(f"[asr] Download complete. Using local model directory: {downloaded_dir}")
+    return True
+
+
+def run_interactive_cli(settings: Settings, host: str, port: int, open_browser: bool) -> int:
+    print(
+        "RealTimeLister CLI\n"
+        f"- Project root: {PROJECT_ROOT}\n"
+        f"- Model root: {_repo_model_root()}\n"
+        "Type help for commands.\n"
+    )
+    _print_cli_status(settings)
+    ready = _ensure_cli_asr_ready(settings)
+    if ready and _prompt_yes_no("ASR is ready. Launch the Web UI now?", default=True):
+        try:
+            run_web_interface(settings, host, port, open_browser=open_browser)
+        except Exception as exc:
+            print(f"[web] Failed to start: {exc}")
+
+    while True:
+        try:
+            raw = input("realtime-lister> ").strip()
+        except EOFError:
+            print()
+            return 0
+        except KeyboardInterrupt:
+            print()
+            return 0
+
+        if not raw:
+            continue
+
+        command = raw.lower()
+        if command in {"quit", "exit"}:
+            return 0
+        if command == "help":
+            print(INTERACTIVE_CLI_HELP)
+            continue
+        if command == "status":
+            _print_cli_status(settings)
+            continue
+        if command == "setup":
+            _ensure_cli_asr_ready(settings, force_download=False)
+            continue
+        if command == "download":
+            _ensure_cli_asr_ready(settings, force_download=True)
+            continue
+        if command == "start":
+            if not _ensure_cli_asr_ready(settings, force_download=False):
+                continue
+            try:
+                run_web_interface(settings, host, port, open_browser=open_browser)
+            except Exception as exc:
+                print(f"[web] Failed to start: {exc}")
+            continue
+        if command == "terminal":
+            if not _ensure_cli_asr_ready(settings, force_download=False):
+                continue
+            try:
+                run_terminal_session(settings)
+            except Exception as exc:
+                print(f"[terminal] Failed to start: {exc}")
+            continue
+        print("Unknown command. Type help.")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Realtime meeting speech translation (local ASR + LLM translation)")
+    parser.add_argument("--source-language", default=None, help="ASR source language, e.g. zh, en, auto")
+    parser.add_argument("--target-language", default=None, help="Target translation language, e.g. en, zh")
+    parser.add_argument("--asr-model", default=None, help="faster-whisper model name, e.g. small, medium")
+    parser.add_argument("--input-device", default=None, help="Audio input device id or name, default auto")
+    parser.add_argument("--translation-model", default=None, help="LLM model for translation, e.g. gpt-5.1")
+    parser.add_argument(
+        "--translation-prompt-template",
+        default=None,
+        help="Custom translation system prompt template. Supports placeholders like {source_language}, {target_language}, {speaker_label}.",
+    )
+    parser.add_argument("--web", action="store_true", help="Run the local Web UI directly and skip the interactive CLI")
+    parser.add_argument("--terminal", action="store_true", help="Run in terminal mode instead of the local web UI")
+    parser.add_argument("--interactive", action="store_true", help="Force the interactive CLI even when flags are present")
+    parser.add_argument("--host", default="127.0.0.1", help="Host for the local web UI, default 127.0.0.1")
+    parser.add_argument("--port", type=int, default=8080, help="Port for the local web UI, default 8080")
+    parser.add_argument("--no-browser", action="store_true", help="Do not open a browser automatically in web mode")
+    return parser.parse_args()
+
+
+def main() -> int:
+    settings = Settings.load()
+    args = parse_args()
+    if args.web and args.terminal:
+        print("Choose either --web or --terminal, not both.", file=sys.stderr)
+        return 2
+    if args.source_language:
+        settings.source_language = _normalize_source_language(args.source_language)
+    if args.target_language:
+        settings.target_language = _normalize_target_language(args.target_language)
+    if args.asr_model:
+        settings.asr_model = args.asr_model
+        configured_model_dir = _env("RT_ASR_MODEL_DIR", "RT_WHISPER_MODEL_PATH")
+        settings.asr_model_path = _resolve_local_model_hint(settings.asr_model, configured_model_dir)
+    if args.input_device:
+        settings.input_device = args.input_device
+    if args.translation_model:
+        settings.translation_model = args.translation_model
+    if args.translation_prompt_template is not None:
+        candidate = _normalize_translation_prompt_template(args.translation_prompt_template)
+        ok, error = _validate_translation_prompt_template(candidate)
+        if not ok:
+            print(error or "Invalid translation prompt template.", file=sys.stderr)
+            return 2
+        settings.translation_prompt_template = candidate
+
+    use_interactive = args.interactive or (
+        not args.web and not args.terminal and sys.stdin.isatty() and sys.stdout.isatty()
+    )
+    if use_interactive:
+        return run_interactive_cli(settings, args.host, args.port, open_browser=not args.no_browser)
+
+    if not args.terminal:
+        return run_web_interface(settings, args.host, args.port, open_browser=not args.no_browser)
+
+    return run_terminal_session(settings)
 
 
 if __name__ == "__main__":
