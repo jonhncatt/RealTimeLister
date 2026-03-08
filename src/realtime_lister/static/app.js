@@ -129,7 +129,7 @@ function renderGuide(state, noInputs) {
   const shortAsrSource = String(state.asrModelSource || "-").split(/[\\/]/).pop();
   const sourcePlan = languageDisplay(state.sourceLanguage);
   const targetPlan = languageDisplay(state.targetLanguage);
-  const translatorPlan = state.translatorEnabled ? state.translationModel : "ASR only";
+  const translatorPlan = state.translatorEnabled ? state.translationModel : "Mirror only";
   els.runPlanText.textContent = `${sourcePlan} -> ${targetPlan} · ${shortAsrSource} · ${state.selectedInputDeviceLabel} · ${translatorPlan}`;
 
   if (state.running) {
@@ -141,7 +141,7 @@ function renderGuide(state, noInputs) {
   } else if (noInputs) {
     els.nextStepText.textContent = "Next: connect a microphone or choose another input device.";
   } else if (!state.translatorEnabled) {
-    els.nextStepText.textContent = "Ready for ASR only. Add OPENAI_API_KEY if you also want translation.";
+    els.nextStepText.textContent = "Ready for local ASR. Add OPENAI_API_KEY only if you want target-language translation.";
   } else {
     els.nextStepText.textContent = "Ready. Click Start Listening.";
   }
@@ -172,12 +172,14 @@ function renderGuide(state, noInputs) {
 
 function applyState(state) {
   currentState = state;
+  document.body.dataset.translator = state.translatorEnabled ? "on" : "off";
+  document.body.dataset.session = state.running ? "running" : state.loading ? "loading" : "idle";
   const current = state.current;
   const noInputs = Boolean(state.inputDevicesError) || state.inputDevices.length === 0;
   els.statusPill.textContent = state.statusMessage;
   els.statusPill.className = `status-pill ${statusClass(state.statusLevel)}`;
   els.latencyChip.textContent = current ? `${current.translate_ms} ms` : "Waiting";
-  els.asrMode.textContent = `ASR · ${state.asrStrategyName || "Unknown Strategy"}`;
+  els.asrMode.textContent = `ASR :: ${state.asrStrategyName || "Unknown Strategy"}`;
   els.asrSource.textContent = state.asrModelSource;
   els.asrBeam.textContent = String(state.asrBeamSize);
   const currentSourceLanguage = current?.source_language || state.sourceLanguage;
@@ -194,9 +196,15 @@ function applyState(state) {
   els.sourceLabel.textContent = speakerLabel
     ? `${sourceLangLabel} Source · ${speakerLabel}`
     : `${sourceLangLabel} Source`;
-  els.targetLabel.textContent = `${state.targetLanguage.toUpperCase()} Translation`;
-  els.sourceText.textContent = current?.source_text || "Start the session to begin showing source speech.";
-  els.targetText.textContent = current?.translated_text || "Live translation will appear here.";
+  els.targetLabel.textContent = state.translatorEnabled
+    ? `${state.targetLanguage.toUpperCase()} Translation`
+    : "ASR Mirror";
+  els.sourceText.textContent = current?.source_text || "Arm the session and speak into the mic. Captured speech will scroll in here first.";
+  els.targetText.textContent =
+    current?.translated_text ||
+    (state.translatorEnabled
+      ? "Translation output lands here when the translator is online."
+      : "No API key set. This pane mirrors the transcript until translation is enabled.");
   els.historyCount.textContent = `${state.history.length} item${state.history.length === 1 ? "" : "s"}`;
   els.controlNote.textContent =
     state.inputDevicesError ||
@@ -220,7 +228,7 @@ function applyState(state) {
   els.stopBtn.disabled = !state.running && !state.loading;
   els.clearBtn.disabled = state.running || state.loading ? false : state.history.length === 0;
   els.sourceLanguageSelect.disabled = state.running || state.loading;
-  els.targetLanguageSelect.disabled = state.running || state.loading;
+  els.targetLanguageSelect.disabled = state.running || state.loading || !state.translatorEnabled;
   els.inputDeviceSelect.disabled = state.running || state.loading || noInputs;
   els.translationPromptInput.disabled = state.running || state.loading;
   els.resetPromptBtn.disabled = state.running || state.loading;

@@ -8,47 +8,62 @@
   </head>
   <body>
     <div class="backdrop"></div>
+    <div class="scanlines"></div>
     <main class="shell">
       <header class="hero">
-        <div>
-          <p class="eyebrow">Realtime Meeting Translation</p>
-          <h1>Meeting Relay</h1>
-          <p class="summary">译文主屏，原文辅助，控制和历史都留在同一页。</p>
+        <div class="hero-copy">
+          <p class="eyebrow">RTL // Operator Console</p>
+          <h1>Signal Deck</h1>
+          <p class="summary">把原文、译文、设备状态和日志压进同一块终端面板里，像在盯实时控制台，不像在填后台表单。</p>
+          <div class="hero-rack" aria-hidden="true">
+            <span class="rack-chip">LOCAL ASR</span>
+            <span class="rack-chip">LIVE CAPTURE</span>
+            <span class="rack-chip">WEB TUI</span>
+          </div>
         </div>
-        <div class="status-pill" id="status-pill">Idle</div>
+        <div class="hero-status">
+          <div class="status-pill" id="status-pill">Idle</div>
+          <div class="status-meta-stack" aria-hidden="true">
+            <span class="status-meta">single operator view</span>
+            <span class="status-meta">local speech pipeline</span>
+          </div>
+        </div>
       </header>
 
       <section class="layout">
         <section class="stage">
           <div class="panel stage-panel">
             <div class="panel-topline">
-              <span id="asr-mode">ASR</span>
-              <span id="latency-chip">Waiting</span>
+              <span class="console-tag">Live Feed</span>
+              <div class="topline-badges">
+                <span id="asr-mode">ASR</span>
+                <span id="latency-chip">Waiting</span>
+              </div>
             </div>
             <div class="subtitle-stack">
-              <p class="subtitle-label" id="source-label">Source</p>
-              <p class="subtitle-source" id="source-text">Start the session to begin showing source speech.</p>
-              <p class="subtitle-label accent" id="target-label">Translation</p>
-              <p class="subtitle-target" id="target-text">Live translation will appear here.</p>
+              <p class="subtitle-label" id="source-label">Source Feed</p>
+              <p class="subtitle-source" id="source-text">Arm the session and speak into the mic. Captured speech will scroll in here first.</p>
+              <p class="subtitle-label accent" id="target-label">Target Output</p>
+              <p class="subtitle-target" id="target-text">Translation output lands here when the translator is online.</p>
             </div>
           </div>
 
           <section class="panel guide-panel">
             <div class="guide-topline">
               <div>
-                <p class="section-title">Ready Check</p>
+                <p class="section-title">Preflight</p>
                 <p class="guide-subtitle" id="next-step-text">Checking setup...</p>
               </div>
               <p class="guide-plan" id="run-plan-text">Loading current plan...</p>
             </div>
             <div class="guide-grid">
               <article class="guide-item" id="model-check-card">
-                <p class="guide-item-title">ASR Model</p>
+                <p class="guide-item-title">ASR Node</p>
                 <p class="guide-item-state" id="model-check-state">Checking...</p>
                 <p class="guide-item-detail" id="model-check-detail">-</p>
               </article>
               <article class="guide-item" id="mic-check-card">
-                <p class="guide-item-title">Microphone</p>
+                <p class="guide-item-title">Mic Link</p>
                 <p class="guide-item-state" id="mic-check-state">Checking...</p>
                 <p class="guide-item-detail" id="mic-check-detail">-</p>
               </article>
@@ -62,7 +77,7 @@
 
           <div class="controls-grid">
             <section class="panel control-panel">
-              <div class="section-title">Controls</div>
+              <div class="section-title">Command Deck</div>
               <div class="inline-grid">
                 <label class="select-block">
                   <span class="select-label">Source Language</span>
@@ -89,7 +104,7 @@
                 <button id="clear-btn" class="btn ghost">Clear History</button>
               </div>
               <details class="advanced-panel" id="advanced-panel">
-                <summary>Advanced Settings</summary>
+                <summary>Prompt Console</summary>
                 <label class="select-block">
                   <span class="select-label">Translation Prompt</span>
                   <textarea id="translation-prompt-input" class="prompt-input" rows="5"></textarea>
@@ -106,7 +121,7 @@
             </section>
 
             <section class="panel metrics-panel">
-              <div class="section-title">Session</div>
+              <div class="section-title">Telemetry</div>
               <dl class="metric-list">
                 <div>
                   <dt>ASR Source</dt>
@@ -134,7 +149,7 @@
                 </div>
               </dl>
               <div class="status-card" id="model-status-card">
-                <p class="status-card-label">ASR Readiness</p>
+                <p class="status-card-label">Node Status</p>
                 <p class="status-card-body" id="model-status-text">Checking model setup...</p>
               </div>
             </section>
@@ -144,8 +159,8 @@
         <aside class="panel history-panel">
           <div class="history-header">
             <div>
-              <p class="section-title">History</p>
-              <p class="history-subtitle">最近识别结果按时间追加，包含伪说话人标签。</p>
+              <p class="section-title">Event Log</p>
+              <p class="history-subtitle">实时流里每一段识别都会落成日志，附带伪说话人和翻译耗时。</p>
             </div>
             <span class="history-count" id="history-count">0 items</span>
           </div>
