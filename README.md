@@ -53,6 +53,8 @@ RealTimeLister/model/faster-whisper-small
 
 ## 2. 安装项目
 
+### 2.1 Windows
+
 ```powershell
 cd RealTimeLister
 python -m venv .venv
@@ -62,7 +64,67 @@ python -m venv .venv
 
 说明：全流程都可以不激活虚拟环境，不依赖 `Activate.ps1`。
 
-完成这一步之后，就可以直接用命令 `realtime` 启动。
+如果不激活虚拟环境，直接这样启动：
+
+```powershell
+.\.venv\Scripts\realtime.exe
+```
+
+如果你先执行过：
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+那么后面就可以直接用：
+
+```powershell
+realtime
+```
+
+### 2.2 macOS
+
+建议先装好 Python 3.10+ 和 PortAudio：
+
+```bash
+brew install python@3.11 portaudio
+```
+
+然后安装项目：
+
+```bash
+cd RealTimeLister
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python -m pip install -e .
+```
+
+如果不想激活虚拟环境，直接这样启动：
+
+```bash
+./.venv/bin/realtime
+```
+
+如果你先执行过：
+
+```bash
+source .venv/bin/activate
+```
+
+那么后面就可以直接用：
+
+```bash
+realtime
+```
+
+macOS 首次录音时，系统通常会弹出麦克风权限请求。
+如果没有弹窗，去：
+
+```text
+System Settings -> Privacy & Security -> Microphone
+```
+
+把你实际运行程序的终端应用打开，例如 `Terminal`、`iTerm`、`Warp`。
 
 ---
 
@@ -72,6 +134,12 @@ python -m venv .venv
 
 ```powershell
 copy env.offline-model.example .env
+```
+
+macOS / Linux:
+
+```bash
+cp env.offline-model.example .env
 ```
 
 - `env.offline-model.example`：公司机器不能访问 HF（推荐）
@@ -129,6 +197,20 @@ RT_TRANSLATION_PROMPT_TEMPLATE=You are a professional meeting interpreter.\nTran
 realtime
 ```
 
+如果你没有激活虚拟环境：
+
+Windows:
+
+```powershell
+.\.venv\Scripts\realtime.exe
+```
+
+macOS:
+
+```bash
+./.venv/bin/realtime
+```
+
 首次运行时会进入 CLI，流程是：
 
 1. 自动检查仓库内 `model/` 里有没有 ASR 模型
@@ -152,6 +234,12 @@ realtime
 realtime --web
 ```
 
+macOS 如果没激活虚拟环境：
+
+```bash
+./.venv/bin/realtime --web
+```
+
 默认地址：`http://127.0.0.1:8080`
 
 ### 4.3 终端模式
@@ -160,10 +248,22 @@ realtime --web
 realtime --terminal
 ```
 
+macOS 如果没激活虚拟环境：
+
+```bash
+./.venv/bin/realtime --terminal
+```
+
 ### 4.4 常用参数
 
 ```powershell
 realtime --interactive --source-language auto --target-language en --asr-model small --input-device auto --translation-model gpt-5.1 --host 127.0.0.1 --port 8080
+```
+
+macOS 等价写法：
+
+```bash
+./.venv/bin/realtime --interactive --source-language auto --target-language en --asr-model small --input-device auto --translation-model gpt-5.1 --host 127.0.0.1 --port 8080
 ```
 
 ---
