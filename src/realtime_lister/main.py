@@ -854,7 +854,7 @@ class RealtimeMeetingTranslator:
             f"(max={self.settings.speaker_max_speakers})\n"
             f"- Source -> Target: {source_display} -> {self.settings.target_language}\n"
             f"- Translation model: {self.settings.translation_model}\n"
-            "Press Ctrl+C to stop.\n"
+            "Press Q, S, X, Esc, or Ctrl+C to stop.\n"
         )
         if self.console_output:
             print(startup_message)
@@ -995,6 +995,8 @@ class WebAppState:
                 "translationPromptTemplate": self.settings.translation_prompt_template,
                 "defaultTranslationPromptTemplate": DEFAULT_TRANSLATION_PROMPT_TEMPLATE,
                 "translationPromptPlaceholders": list(TRANSLATION_PROMPT_PLACEHOLDERS),
+                "glossary": self.settings.glossary,
+                "glossaryLineCount": _glossary_line_count(self.settings.glossary),
                 "translatorEnabled": bool(self.settings.api_key),
                 "asrModelSource": asr_source,
                 "asrResolutionMode": "directory" if self.settings.asr_model_path else "model_name",
@@ -1151,6 +1153,16 @@ class WebAppState:
         self._publish_snapshot()
         return True, "Translation prompt template updated."
 
+    def set_glossary(self, value: str) -> tuple[bool, str]:
+        normalized = (value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        line_count = _glossary_line_count(normalized)
+        with self._lock:
+            self.settings.glossary = normalized
+            self._last_info = f"Glossary updated ({line_count} lines)." if line_count else "Glossary cleared."
+        self._publish({"type": "info", "message": self._last_info, "timestamp": time.strftime("%H:%M:%S")})
+        self._publish_snapshot()
+        return True, self._last_info
+
     def set_languages(self, source_language: str, target_language: str) -> tuple[bool, str]:
         normalized_source = _normalize_source_language(source_language)
         normalized_target = _normalize_target_language(target_language)
@@ -1226,6 +1238,11 @@ def _make_handler(static_dir: Path) -> type[BaseHTTPRequestHandler]:
             if path == "/api/translation-prompt":
                 payload = self._read_json()
                 ok, message = self.server.app_state.set_translation_prompt_template(str(payload.get("template") or ""))
+                self._send_json({"ok": ok, "message": message}, status=HTTPStatus.OK if ok else HTTPStatus.BAD_REQUEST)
+                return
+            if path == "/api/glossary":
+                payload = self._read_json()
+                ok, message = self.server.app_state.set_glossary(str(payload.get("glossary") or ""))
                 self._send_json({"ok": ok, "message": message}, status=HTTPStatus.OK if ok else HTTPStatus.BAD_REQUEST)
                 return
             if path == "/api/languages":
@@ -1312,9 +1329,12 @@ def run_web_interface(settings: Settings, host: str, port: int, open_browser: bo
         f"- Speaker split: {'on' if settings.speaker_split_enabled else 'off'} (max={settings.speaker_max_speakers})\n"
         f"- Translation model: {settings.translation_model}\n"
         "Use the browser controls to start or stop listening.\n"
+        "Press Q, S, X, or Esc in this terminal to stop the local server.\n"
     )
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+
+    shortcut_done = _start_runtime_shortcut_listener(lambda: (app_state.stop(), server.shutdown()))
 
     def _handle_signal(signum, frame):  # noqa: ANN001
         _ = (signum, frame)
@@ -1329,6 +1349,8 @@ def run_web_interface(settings: Settings, host: str, port: int, open_browser: bo
     except KeyboardInterrupt:
         pass
     finally:
+        if shortcut_done is not None:
+            shortcut_done.set()
         app_state.stop()
         server.server_close()
     return 0
@@ -1336,6 +1358,7 @@ def run_web_interface(settings: Settings, host: str, port: int, open_browser: bo
 
 def run_terminal_session(settings: Settings) -> int:
     runner = RealtimeMeetingTranslator(settings)
+    shortcut_done = _start_runtime_shortcut_listener(runner.stop)
 
     def _handle_signal(signum, frame):  # noqa: ANN001
         _ = (signum, frame)
@@ -1348,6 +1371,9 @@ def run_terminal_session(settings: Settings) -> int:
         runner.run()
     except KeyboardInterrupt:
         runner.stop()
+    finally:
+        if shortcut_done is not None:
+            shortcut_done.set()
     return 0
 
 
@@ -1448,6 +1474,10 @@ def _truncate_cli_text(text: str, width: int) -> str:
     return f"{text[: width - 3]}..."
 
 
+def _glossary_line_count(raw: str) -> int:
+    return len([line for line in (raw or "").splitlines() if line.strip()])
+
+
 def _clear_cli_screen() -> None:
     if _cli_supports_ansi():
         print("\033[2J\033[H", end="")
@@ -1477,6 +1507,8 @@ def _read_cli_keypress() -> str:
             "l": "right",
             "w": "web",
             "t": "terminal",
+            "s": "stop",
+            "x": "stop",
             "q": "quit",
             "\x1b": "escape",
         }.get(raw.lower(), raw.lower())
@@ -1511,6 +1543,8 @@ def _read_cli_keypress() -> str:
             "l": "right",
             "w": "web",
             "t": "terminal",
+            "s": "stop",
+            "x": "stop",
             "q": "quit",
         }.get(raw.lower(), raw.lower())
     finally:
@@ -1639,9 +1673,33 @@ def _run_cli_control_panel(settings: "Settings") -> str:
         if key == "terminal":
             _clear_cli_screen()
             return "terminal"
-        if key in {"quit", "escape"}:
+        if key in {"quit", "escape", "stop"}:
             _clear_cli_screen()
             return "quit"
+
+
+def _start_runtime_shortcut_listener(stop_action: Callable[[], None]) -> threading.Event | None:
+    if not _cli_supports_ansi():
+        return None
+
+    done = threading.Event()
+
+    def _worker() -> None:
+        while not done.is_set():
+            try:
+                key = _read_cli_keypress()
+            except Exception:
+                return
+            if key in {"quit", "escape", "stop"}:
+                try:
+                    stop_action()
+                finally:
+                    done.set()
+                return
+
+    thread = threading.Thread(target=_worker, name="realtime-shortcut-listener", daemon=True)
+    thread.start()
+    return done
 
 
 def _print_cli_banner() -> None:

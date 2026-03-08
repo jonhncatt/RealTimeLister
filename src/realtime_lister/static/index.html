@@ -116,6 +116,19 @@
                   <button id="save-prompt-btn" class="btn muted">Save Prompt</button>
                   <button id="reset-prompt-btn" class="btn ghost">Reset Default</button>
                 </div>
+                <label class="select-block">
+                  <span class="select-label">Company Glossary</span>
+                  <textarea id="glossary-input" class="prompt-input glossary-input" rows="6" placeholder="One term per line. Example:&#10;CRM=Customer Relationship Management&#10;老约翰=Old John"></textarea>
+                </label>
+                <p class="control-hint">
+                  这部分只会喂给翻译模型，不会让 Whisper 识别更准。可上传 `.txt`、`.md`、`.csv` 之类的文本文件。
+                </p>
+                <div class="button-row advanced-actions">
+                  <button id="upload-glossary-btn" class="btn muted">Upload Terms</button>
+                  <button id="save-glossary-btn" class="btn primary">Save Glossary</button>
+                  <button id="clear-glossary-btn" class="btn ghost">Clear Glossary</button>
+                </div>
+                <input id="glossary-file-input" type="file" accept=".txt,.md,.csv,.tsv,.json" hidden />
               </details>
               <p class="control-note" id="control-note">Browser connected. Waiting for session start.</p>
             </section>

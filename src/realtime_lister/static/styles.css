@@ -348,7 +348,7 @@ h1 {
 
 .guide-item,
 .status-card,
-.history-item,
+.history-turn,
 .history-empty,
 .advanced-panel {
   border: 1px solid var(--line);
@@ -357,7 +357,7 @@ h1 {
 
 .guide-item,
 .status-card,
-.history-item,
+.history-turn,
 .history-empty {
   padding: 14px;
   clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
@@ -441,6 +441,10 @@ h1 {
   min-height: 138px;
   resize: vertical;
   line-height: 1.44;
+}
+
+.glossary-input {
+  min-height: 152px;
 }
 
 .input-select:focus,
@@ -571,16 +575,19 @@ h1 {
 .history-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   overflow: auto;
   padding-right: 4px;
 }
 
-.history-item {
+.history-turn {
   animation: lift-in 200ms ease;
+  background:
+    linear-gradient(90deg, rgba(255, 90, 45, 0.08), transparent 18%),
+    rgba(255, 255, 255, 0.02);
 }
 
-.history-meta {
+.history-turn-meta {
   display: flex;
   justify-content: space-between;
   gap: 10px;
@@ -589,19 +596,43 @@ h1 {
   font-size: 0.78rem;
 }
 
-.history-source,
-.history-target {
+.history-turn-speaker {
+  color: var(--text-strong);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.history-stream {
+  display: grid;
+  gap: 10px;
+}
+
+.history-stream-source,
+.history-stream-target {
   margin: 0;
   line-height: 1.45;
 }
 
-.history-source {
+.history-stream-source {
   color: rgba(246, 217, 202, 0.72);
-  margin-bottom: 10px;
 }
 
-.history-target {
+.history-stream-target {
   color: var(--text-strong);
+}
+
+.history-stream-target.mirror-mode {
+  color: rgba(246, 217, 202, 0.86);
+}
+
+.history-stream-label {
+  display: inline-block;
+  min-width: 3.5rem;
+  margin-right: 10px;
+  color: var(--accent-bright);
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
 .history-empty {

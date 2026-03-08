@@ -23,6 +23,7 @@ const els = {
   inputDeviceSelect: document.getElementById("input-device-select"),
   advancedPanel: document.getElementById("advanced-panel"),
   translationPromptInput: document.getElementById("translation-prompt-input"),
+  glossaryInput: document.getElementById("glossary-input"),
   asrSource: document.getElementById("asr-source"),
   asrBeam: document.getElementById("asr-beam"),
   direction: document.getElementById("direction"),
@@ -37,14 +38,21 @@ const els = {
   stopBtn: document.getElementById("stop-btn"),
   savePromptBtn: document.getElementById("save-prompt-btn"),
   resetPromptBtn: document.getElementById("reset-prompt-btn"),
+  uploadGlossaryBtn: document.getElementById("upload-glossary-btn"),
+  saveGlossaryBtn: document.getElementById("save-glossary-btn"),
+  clearGlossaryBtn: document.getElementById("clear-glossary-btn"),
+  glossaryFileInput: document.getElementById("glossary-file-input"),
   clearBtn: document.getElementById("clear-btn"),
 };
 
 let currentState = null;
 let promptFocused = false;
 let promptDirty = false;
+let glossaryFocused = false;
+let glossaryDirty = false;
 els.savePromptBtn.disabled = true;
 els.resetPromptBtn.disabled = true;
+els.saveGlossaryBtn.disabled = true;
 
 const LANGUAGE_OPTIONS = [
   { value: "auto", label: "Auto Detect" },
@@ -65,29 +73,98 @@ function escapeHtml(text) {
     .replaceAll("'", "&#39;");
 }
 
-function renderHistory(history) {
+function normalizeMultilineText(text) {
+  return String(text || "").replace(/\r\n?/g, "\n").trim();
+}
+
+function glossaryLineCount(text) {
+  return normalizeMultilineText(text)
+    .split("\n")
+    .filter((line) => line.trim()).length;
+}
+
+function buildHistoryTurns(history) {
+  const turns = [];
+  for (const item of history) {
+    const sourceText = String(item.source_text || "").trim();
+    const targetText = String(item.translated_text || "").trim();
+    const speakerLabel = item.speaker_label || "Speaker ?";
+    const sourceLanguage = item.source_language || "";
+    const targetLanguage = item.target_language || "";
+    const last = turns[turns.length - 1];
+    const sameTurn =
+      last &&
+      last.speakerLabel === speakerLabel &&
+      last.sourceLanguage === sourceLanguage &&
+      last.targetLanguage === targetLanguage &&
+      last.segmentCount < 8;
+
+    if (sameTurn) {
+      if (sourceText) {
+        last.sourceParts.push(sourceText);
+      }
+      if (targetText) {
+        last.targetParts.push(targetText);
+      }
+      last.segmentCount += 1;
+      last.endTimestamp = item.timestamp;
+      last.lastTranslateMs = item.translate_ms;
+      continue;
+    }
+
+    turns.push({
+      speakerLabel,
+      sourceLanguage,
+      targetLanguage,
+      startTimestamp: item.timestamp,
+      endTimestamp: item.timestamp,
+      segmentCount: 1,
+      lastTranslateMs: item.translate_ms,
+      sourceParts: sourceText ? [sourceText] : [],
+      targetParts: targetText ? [targetText] : [],
+    });
+  }
+  return turns;
+}
+
+function renderHistory(history, translatorEnabled) {
   if (!history.length) {
     els.historyList.innerHTML = '<div class="history-empty">No transcript yet.</div>';
-    return;
+    return { turnCount: 0, segmentCount: 0 };
   }
 
-  els.historyList.innerHTML = history
-    .slice()
-    .reverse()
+  const shouldStick =
+    els.historyList.scrollTop + els.historyList.clientHeight >= els.historyList.scrollHeight - 48;
+  const turns = buildHistoryTurns(history);
+
+  els.historyList.innerHTML = turns
     .map(
-      (item) => `
-        <article class="history-item">
-          <div class="history-meta">
-            <span>${escapeHtml(item.timestamp)}</span>
-            <span>${escapeHtml(item.speaker_label || "Speaker ?")}</span>
-            <span>${escapeHtml(String(item.translate_ms))} ms</span>
+      (turn) => `
+        <article class="history-turn">
+          <div class="history-turn-meta">
+            <span class="history-turn-speaker">${escapeHtml(turn.speakerLabel)}</span>
+            <span>${escapeHtml(turn.startTimestamp)}${turn.endTimestamp !== turn.startTimestamp ? ` → ${escapeHtml(turn.endTimestamp)}` : ""}</span>
+            <span>${escapeHtml(String(turn.segmentCount))} seg</span>
           </div>
-          <p class="history-source">${escapeHtml(item.source_text)}</p>
-          <p class="history-target">${escapeHtml(item.translated_text)}</p>
+          <div class="history-stream">
+            <p class="history-stream-source">
+              <span class="history-stream-label">${escapeHtml((turn.sourceLanguage || "auto").toUpperCase())}</span>
+              ${escapeHtml(turn.sourceParts.join(" "))}
+            </p>
+            <p class="history-stream-target ${translatorEnabled ? "" : "mirror-mode"}">
+              <span class="history-stream-label">${escapeHtml((turn.targetLanguage || "out").toUpperCase())}</span>
+              ${escapeHtml(turn.targetParts.join(" "))}
+            </p>
+          </div>
         </article>
       `
     )
     .join("");
+
+  if (shouldStick) {
+    els.historyList.scrollTop = els.historyList.scrollHeight;
+  }
+  return { turnCount: turns.length, segmentCount: history.length };
 }
 
 function statusClass(level) {
@@ -130,7 +207,8 @@ function renderGuide(state, noInputs) {
   const sourcePlan = languageDisplay(state.sourceLanguage);
   const targetPlan = languageDisplay(state.targetLanguage);
   const translatorPlan = state.translatorEnabled ? state.translationModel : "Mirror only";
-  els.runPlanText.textContent = `${sourcePlan} -> ${targetPlan} · ${shortAsrSource} · ${state.selectedInputDeviceLabel} · ${translatorPlan}`;
+  const glossaryPlan = state.glossaryLineCount ? ` · ${state.glossaryLineCount} term` : "";
+  els.runPlanText.textContent = `${sourcePlan} -> ${targetPlan} · ${shortAsrSource} · ${state.selectedInputDeviceLabel} · ${translatorPlan}${glossaryPlan}`;
 
   if (state.running) {
     els.nextStepText.textContent = "Session is live. Speak near the microphone.";
@@ -158,7 +236,7 @@ function renderGuide(state, noInputs) {
   const translatorTone = state.translatorEnabled ? "ready" : "warn";
   const translatorState = state.translatorEnabled ? "Ready" : "Optional";
   const translatorDetail = state.translatorEnabled
-    ? `Using ${state.translationModel}`
+    ? `Using ${state.translationModel}${state.glossaryLineCount ? ` + ${state.glossaryLineCount} glossary lines` : ""}`
     : "OPENAI_API_KEY not set. Start still works, but only ASR will run.";
   setGuideItem(
     els.translatorCheckCard,
@@ -232,16 +310,24 @@ function applyState(state) {
   els.inputDeviceSelect.disabled = state.running || state.loading || noInputs;
   els.translationPromptInput.disabled = state.running || state.loading;
   els.resetPromptBtn.disabled = state.running || state.loading;
+  els.glossaryInput.disabled = false;
+  els.uploadGlossaryBtn.disabled = false;
+  els.clearGlossaryBtn.disabled = false;
   if (!promptFocused && !promptDirty) {
     els.translationPromptInput.value = state.translationPromptTemplate || "";
   }
+  if (!glossaryFocused && !glossaryDirty) {
+    els.glossaryInput.value = state.glossary || "";
+  }
   els.savePromptBtn.disabled = state.running || state.loading || !promptDirty;
+  els.saveGlossaryBtn.disabled = !glossaryDirty;
 
   renderLanguageOptions(els.sourceLanguageSelect, state.sourceLanguage, { allowAuto: true });
   renderLanguageOptions(els.targetLanguageSelect, state.targetLanguage, { allowAuto: false });
   renderInputDevices(state);
   renderGuide(state, noInputs);
-  renderHistory(state.history);
+  const historySummary = renderHistory(state.history, state.translatorEnabled);
+  els.historyCount.textContent = `${historySummary.turnCount} turns · ${historySummary.segmentCount} seg`;
 }
 
 function renderInputDevices(state) {
@@ -354,6 +440,23 @@ function bindControls() {
     els.savePromptBtn.disabled = !promptDirty;
   });
 
+  els.glossaryInput.addEventListener("focus", () => {
+    glossaryFocused = true;
+    els.advancedPanel.open = true;
+  });
+  els.glossaryInput.addEventListener("blur", () => {
+    glossaryFocused = false;
+  });
+  els.glossaryInput.addEventListener("input", () => {
+    if (!currentState) {
+      glossaryDirty = true;
+      els.saveGlossaryBtn.disabled = false;
+      return;
+    }
+    glossaryDirty = normalizeMultilineText(els.glossaryInput.value) !== normalizeMultilineText(currentState.glossary || "");
+    els.saveGlossaryBtn.disabled = !glossaryDirty;
+  });
+
   els.savePromptBtn.addEventListener("click", async () => {
     try {
       await postJson("/api/translation-prompt", { template: els.translationPromptInput.value });
@@ -372,6 +475,55 @@ function bindControls() {
       els.savePromptBtn.disabled = true;
       els.translationPromptInput.value = currentState?.defaultTranslationPromptTemplate || "";
       els.controlNote.textContent = "Translation prompt reset to default.";
+    } catch (error) {
+      els.controlNote.textContent = error.message;
+    }
+  });
+
+  els.uploadGlossaryBtn.addEventListener("click", () => {
+    els.glossaryFileInput.click();
+  });
+
+  els.glossaryFileInput.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    try {
+      const text = normalizeMultilineText(await file.text());
+      await postJson("/api/glossary", { glossary: text });
+      glossaryDirty = false;
+      els.saveGlossaryBtn.disabled = true;
+      els.glossaryInput.value = text;
+      els.controlNote.textContent = `${file.name} imported (${glossaryLineCount(text)} lines).`;
+    } catch (error) {
+      els.controlNote.textContent = error.message;
+    } finally {
+      event.target.value = "";
+    }
+  });
+
+  els.saveGlossaryBtn.addEventListener("click", async () => {
+    try {
+      const glossary = normalizeMultilineText(els.glossaryInput.value);
+      await postJson("/api/glossary", { glossary });
+      glossaryDirty = false;
+      els.saveGlossaryBtn.disabled = true;
+      els.controlNote.textContent = glossary
+        ? `Glossary saved (${glossaryLineCount(glossary)} lines).`
+        : "Glossary cleared.";
+    } catch (error) {
+      els.controlNote.textContent = error.message;
+    }
+  });
+
+  els.clearGlossaryBtn.addEventListener("click", async () => {
+    try {
+      await postJson("/api/glossary", { glossary: "" });
+      glossaryDirty = false;
+      els.saveGlossaryBtn.disabled = true;
+      els.glossaryInput.value = "";
+      els.controlNote.textContent = "Glossary cleared.";
     } catch (error) {
       els.controlNote.textContent = error.message;
     }
