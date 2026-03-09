@@ -200,7 +200,7 @@ function describeEngineState(state) {
     return {
       chip: "Model Load",
       value: "Loading Model",
-      detail: "ASR engine is being loaded into memory and the microphone is being armed.",
+      detail: "ASR engine is being loaded into memory and the selected audio input is being armed.",
       tone: "loading",
     };
   }
@@ -262,7 +262,7 @@ function describeSessionState(state) {
   return {
     chip: "Session Idle",
     value: "Idle",
-    detail: "No active capture. Start the session to load the microphone feed into the ASR engine.",
+    detail: "No active capture. Start the session to load the selected audio input into the ASR engine.",
     tone: "idle",
     metric: "Idle",
   };
@@ -309,13 +309,13 @@ function renderGuide(state, noInputs) {
   els.runPlanText.textContent = `${sourcePlan} -> ${targetPlan} · ${shortAsrSource} · ${state.selectedInputDeviceLabel}${asrHotwordsPlan} · ${translatorPlan}${glossaryPlan}`;
 
   if (state.running) {
-    els.nextStepText.textContent = "Session is live. Speak near the microphone.";
+    els.nextStepText.textContent = "Session is live. The selected audio source is being monitored now.";
   } else if (state.loading) {
-    els.nextStepText.textContent = "Loading model and preparing microphone...";
+    els.nextStepText.textContent = "Loading model and preparing the selected audio input...";
   } else if (state.asrModelStatusLevel === "error") {
     els.nextStepText.textContent = "Next: fix the ASR model first. Set RT_ASR_MODEL_DIR or allow model download.";
   } else if (noInputs) {
-    els.nextStepText.textContent = "Next: connect a microphone or choose another input device.";
+    els.nextStepText.textContent = "Next: connect a microphone or choose another audio input source.";
   } else if (!state.translatorEnabled) {
     els.nextStepText.textContent = "Ready for local ASR. Add OPENAI_API_KEY only if you want target-language translation.";
   } else {
@@ -417,7 +417,7 @@ function applyState(state) {
   } else if (state.asrModelStatusLevel === "error") {
     els.startBtn.textContent = "Model Not Ready";
   } else if (noInputs) {
-    els.startBtn.textContent = "No Microphone";
+    els.startBtn.textContent = "No Audio Input";
   } else {
     els.startBtn.textContent = "Start Listening";
   }

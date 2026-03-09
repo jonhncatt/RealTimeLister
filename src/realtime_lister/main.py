@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import queue
@@ -95,6 +96,7 @@ CLI_TARGET_LANGUAGE_OPTIONS = (
     ("fr", "French"),
     ("de", "German"),
 )
+SYSTEM_AUDIO_AUTO_ID = "system"
 
 
 def _env(*keys: str, default: str = "") -> str:
@@ -361,6 +363,15 @@ class AsrStrategy:
     label: str
 
 
+@dataclass(slots=True)
+class ResolvedInputDevice:
+    stream_device_index: int
+    display_name: str
+    stream_channels: int
+    capture_kind: str
+    hostapi_name: str
+
+
 def _resolve_asr_strategy(settings: Settings) -> AsrStrategy:
     if settings.asr_model_path:
         return AsrStrategy(key="fixed_dir", label="Fixed Local Directory")
@@ -369,40 +380,140 @@ def _resolve_asr_strategy(settings: Settings) -> AsrStrategy:
     return AsrStrategy(key="online_auto", label="Model Name + Auto Download")
 
 
+def _default_device_indexes(default_device: Any) -> tuple[int | None, int | None]:
+    default_input_index: int | None = None
+    default_output_index: int | None = None
+    if isinstance(default_device, (list, tuple)):
+        if len(default_device) >= 1:
+            try:
+                if int(default_device[0]) >= 0:
+                    default_input_index = int(default_device[0])
+            except Exception:
+                default_input_index = None
+        if len(default_device) >= 2:
+            try:
+                if int(default_device[1]) >= 0:
+                    default_output_index = int(default_device[1])
+            except Exception:
+                default_output_index = None
+    elif isinstance(default_device, int) and default_device >= 0:
+        default_input_index = default_device
+    return default_input_index, default_output_index
+
+
+def _hostapi_name(hostapis: Any, index: int) -> str:
+    if 0 <= index < len(hostapis):
+        return str(hostapis[index].get("name") or "")
+    return ""
+
+
+def _normalize_loopback_name(name: str) -> str:
+    return name.replace("[Loopback]", "").replace("(loopback)", "").strip(" -")
+
+
+def _looks_like_system_audio_device(name: str) -> bool:
+    lowered = name.casefold()
+    markers = (
+        "loopback",
+        "stereo mix",
+        "system audio",
+        "zoomaudiodevice",
+        "microsoft teams audio",
+        "blackhole",
+        "vb-cable",
+        "voicemeeter",
+        "cable output",
+        "loopback audio",
+    )
+    return any(marker in lowered for marker in markers)
+
+
+def _is_wasapi_loopback_device(index: int, *, name: str, hostapi_name: str) -> bool:
+    if "WASAPI" not in hostapi_name.upper():
+        return False
+    if "[loopback]" in name.casefold():
+        return True
+    if os.name != "nt":
+        return False
+    lib = getattr(sd, "_lib", None)
+    if lib is None:
+        return False
+    try:
+        return bool(int(lib.PaWasapi_IsLoopback(index)))
+    except Exception:
+        return False
+
+
 def _query_input_devices() -> tuple[list[dict[str, Any]], str | None, str | None]:
     try:
         devices = sd.query_devices()
+        hostapis = sd.query_hostapis()
         default_device = sd.default.device
     except Exception as exc:
         return [], None, f"Audio device query failed: {exc}"
 
-    default_input_index: int | None = None
-    if isinstance(default_device, (list, tuple)) and default_device:
-        try:
-            if int(default_device[0]) >= 0:
-                default_input_index = int(default_device[0])
-        except Exception:
-            default_input_index = None
-    elif isinstance(default_device, int) and default_device >= 0:
-        default_input_index = default_device
-
-    options: list[dict[str, Any]] = []
+    default_input_index, default_output_index = _default_device_indexes(default_device)
+    microphone_options: list[dict[str, Any]] = []
+    system_options: list[dict[str, Any]] = []
     for index, device in enumerate(devices):
         input_channels = int(device.get("max_input_channels") or 0)
         if input_channels <= 0:
             continue
-        options.append(
-            {
-                "id": str(index),
-                "name": str(device.get("name") or f"Input {index}"),
-                "inputChannels": input_channels,
-                "isDefault": default_input_index == index,
-            }
+        raw_name = str(device.get("name") or f"Input {index}")
+        hostapi_name = _hostapi_name(hostapis, int(device.get("hostapi") or -1))
+        capture_kind = (
+            "system"
+            if _is_wasapi_loopback_device(index, name=raw_name, hostapi_name=hostapi_name)
+            or _looks_like_system_audio_device(raw_name)
+            else "microphone"
         )
+        display_name = raw_name
+        if capture_kind == "system":
+            display_name = f"System Audio · {_normalize_loopback_name(raw_name)}"
+        option = {
+            "id": str(index),
+            "resolvedId": str(index),
+            "name": display_name,
+            "rawName": raw_name,
+            "inputChannels": input_channels,
+            "isDefault": default_input_index == index,
+            "kind": capture_kind,
+            "hostApiName": hostapi_name,
+        }
+        if capture_kind == "system":
+            system_options.append(option)
+        else:
+            microphone_options.append(option)
+    if default_output_index is not None:
+        default_output_name = str(devices[default_output_index].get("name") or "")
+        normalized_output = _normalize_loopback_name(default_output_name)
+        default_system = next(
+            (
+                item
+                for item in system_options
+                if _normalize_loopback_name(str(item.get("rawName") or "")) == normalized_output
+            ),
+            None,
+        )
+        if default_system is not None:
+            system_options.insert(
+                0,
+                {
+                    "id": SYSTEM_AUDIO_AUTO_ID,
+                    "resolvedId": default_system["resolvedId"],
+                    "name": f"System Audio · Default Output ({normalized_output})",
+                    "rawName": default_system["rawName"],
+                    "inputChannels": default_system["inputChannels"],
+                    "isDefault": False,
+                    "kind": "system",
+                    "hostApiName": default_system["hostApiName"],
+                },
+            )
+    options = microphone_options + system_options
     return options, str(default_input_index) if default_input_index is not None else None, None
 
 
-def _resolve_input_device(selection: str) -> tuple[int, str]:
+def _resolve_input_device(selection: str) -> ResolvedInputDevice:
     devices, default_input_id, error = _query_input_devices()
     if error:
         raise RuntimeError(error)
@@ -410,29 +521,57 @@ def _resolve_input_device(selection: str) -> tuple[int, str]:
         raise RuntimeError("No input device available. Connect a microphone or choose a different audio input device.")
 
     requested = (selection or "auto").strip()
+    selected_item: dict[str, Any] | None = None
     if not requested or requested.lower() == "auto":
         if default_input_id is not None:
             for item in devices:
                 if item["id"] == default_input_id:
-                    return int(item["id"]), item["name"]
-        first = devices[0]
-        return int(first["id"]), first["name"]
-
-    if requested.lstrip("-").isdigit():
+                    selected_item = item
+                    break
+        if selected_item is None:
+            selected_item = next((item for item in devices if item.get("kind") != "system"), devices[0])
+    elif requested.lstrip("-").isdigit() or requested == SYSTEM_AUDIO_AUTO_ID:
         for item in devices:
             if item["id"] == requested:
-                return int(item["id"]), item["name"]
-        raise RuntimeError(f"Audio input device {requested} is not available or has no input channels.")
+                selected_item = item
+                break
+        if selected_item is None and requested.lstrip("-").isdigit():
+            raise RuntimeError(f"Audio input device {requested} is not available or has no input channels.")
+        if selected_item is None:
+            raise RuntimeError("System audio capture is not available on this machine. Choose a microphone input instead.")
+    else:
+        lowered = requested.casefold()
+        for item in devices:
+            if item["name"].casefold() == lowered or str(item.get("rawName") or "").casefold() == lowered:
+                selected_item = item
+                break
+        if selected_item is None:
+            for item in devices:
+                if lowered in item["name"].casefold() or lowered in str(item.get("rawName") or "").casefold():
+                    selected_item = item
+                    break
+        if selected_item is None:
+            available = ", ".join(item["name"] for item in devices[:6])
+            raise RuntimeError(f"Audio input device '{requested}' was not found. Available inputs: {available}")
 
-    lowered = requested.casefold()
-    for item in devices:
-        if item["name"].casefold() == lowered:
-            return int(item["id"]), item["name"]
-    for item in devices:
-        if lowered in item["name"].casefold():
-            return int(item["id"]), item["name"]
-    available = ", ".join(item["name"] for item in devices[:5])
-    raise RuntimeError(f"Audio input device '{requested}' was not found. Available inputs: {available}")
+    return ResolvedInputDevice(
+        stream_device_index=int(selected_item["resolvedId"]),
+        display_name=str(selected_item["name"]),
+        stream_channels=max(1, int(selected_item.get("inputChannels") or 1)),
+        capture_kind=str(selected_item.get("kind") or "microphone"),
+        hostapi_name=str(selected_item.get("hostApiName") or ""),
+    )
+
+
+def _input_stream_extra_settings(device: ResolvedInputDevice) -> Any | None:
+    if os.name != "nt":
+        return None
+    if "WASAPI" not in device.hostapi_name.upper():
+        return None
+    try:
+        return sd.WasapiSettings(auto_convert=True)
+    except Exception:
+        return None
 
 
 def _configure_network_env(settings: Settings) -> None:
@@ -780,7 +919,12 @@ class RealtimeMeetingTranslator:
         self.on_result = on_result
         self.on_info = on_info
         self.console_output = console_output
-        self.input_device_index, self.input_device_name = _resolve_input_device(settings.input_device)
+        self.input_device = _resolve_input_device(settings.input_device)
+        self.input_device_index = self.input_device.stream_device_index
+        self.input_device_name = self.input_device.display_name
+        self.input_device_channels = self.input_device.stream_channels
+        self.input_capture_kind = self.input_device.capture_kind
+        self.input_extra_settings = _input_stream_extra_settings(self.input_device)
         _configure_network_env(settings)
         model_source = _resolve_asr_model_source(settings)
         try:
@@ -809,7 +953,16 @@ class RealtimeMeetingTranslator:
             print(f"[audio warning] {status}", file=sys.stderr)
         if self.stop_event.is_set():
             return
-        data = bytes(indata)
+        if self.input_device_channels > 1:
+            samples = np.frombuffer(indata, dtype=np.int16)
+            frames_available = samples.size // self.input_device_channels
+            if frames_available <= 0:
+                return
+            reshaped = samples[: frames_available * self.input_device_channels].reshape(frames_available, self.input_device_channels)
+            mono = np.mean(reshaped.astype(np.float32), axis=1).clip(-32768, 32767).astype(np.int16)
+            data = mono.tobytes()
+        else:
+            data = bytes(indata)
         for i in range(0, len(data), FRAME_BYTES):
             frame = data[i : i + FRAME_BYTES]
             if len(frame) == FRAME_BYTES:
@@ -880,7 +1033,7 @@ class RealtimeMeetingTranslator:
             "Realtime Meeting Translator started.\n"
             f"- ASR model: {_resolve_asr_model_source(self.settings)}\n"
             f"- ASR beam size: {self.settings.asr_beam_size}\n"
-            f"- Audio input: {self.input_device_name} ({self.input_device_index})\n"
+            f"- Audio input: {self.input_device_name} ({self.input_device_index}, {self.input_capture_kind})\n"
             f"- Speaker split: {'on' if self.settings.speaker_split_enabled else 'off'} "
             f"(max={self.settings.speaker_max_speakers})\n"
             f"- Source -> Target: {source_display} -> {self.settings.target_language}\n"
@@ -893,7 +1046,7 @@ class RealtimeMeetingTranslator:
             self.on_info(
                 f"ASR ready: {_resolve_asr_model_source(self.settings)} | "
                 f"{source_display}->{self.settings.target_language} | "
-                f"mic={self.input_device_name}"
+                f"input={self.input_device_name}"
             )
         if not self.translator.enabled:
             message = "OPENAI_API_KEY not set. Running ASR-only mode."
@@ -906,8 +1059,9 @@ class RealtimeMeetingTranslator:
             samplerate=SAMPLE_RATE,
             blocksize=FRAME_SAMPLES,
             dtype="int16",
-            channels=1,
+            channels=self.input_device_channels,
             device=self.input_device_index,
+            extra_settings=self.input_extra_settings,
             callback=self._audio_callback,
         ):
             while not self.stop_event.is_set():
@@ -1094,7 +1248,7 @@ class WebAppState:
             self._loading = True
             self._stop_requested = False
             self._status_level = "loading"
-            self._status_message = "Loading ASR model and preparing microphone..."
+            self._status_message = "Loading ASR model and preparing audio input..."
             thread = threading.Thread(target=self._run_session, name="realtime-lister-session", daemon=True)
             self._thread = thread
         self._publish_snapshot()
@@ -1116,9 +1270,9 @@ class WebAppState:
                 stop_requested = self._stop_requested
             if stop_requested:
                 runner.stop()
-                self._set_status("stopped", "Stop requested before microphone opened.")
+                self._set_status("stopped", "Stop requested before audio input opened.")
             else:
-                self._set_status("running", "Microphone live. Listening for speech...")
+                self._set_status("running", "Audio input live. Listening for speech...")
             runner.run()
             final_level = "stopped" if self._stop_requested else "idle"
             final_message = "Session stopped." if self._stop_requested else "Session finished."
@@ -1142,7 +1296,7 @@ class WebAppState:
             self._stop_requested = True
         if runner is not None:
             runner.stop()
-            self._set_status("stopped", "Stopping microphone...")
+            self._set_status("stopped", "Stopping audio input...")
             return True, "Stop requested."
         if loading or running:
             self._set_status("stopped", "Waiting for session to stop...")
@@ -1160,7 +1314,7 @@ class WebAppState:
         resolved_label = "auto"
         if normalized.lower() != "auto":
             try:
-                _, resolved_label = _resolve_input_device(normalized)
+                resolved_label = _resolve_input_device(normalized).display_name
             except Exception as exc:
                 self._set_status("error", str(exc))
                 return False, str(exc)
@@ -1220,9 +1374,28 @@ class WebAppState:
 
 
 class RealtimeHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
     def __init__(self, server_address: tuple[str, int], handler_class: type[BaseHTTPRequestHandler], app_state: WebAppState):
         super().__init__(server_address, handler_class)
         self.app_state = app_state
+
+
+def _bind_web_server(
+    host: str,
+    port: int,
+    handler_class: type[BaseHTTPRequestHandler],
+    app_state: "WebAppState",
+) -> tuple[RealtimeHTTPServer, int, str | None]:
+    try:
+        server = RealtimeHTTPServer((host, port), handler_class, app_state)
+        return server, int(server.server_address[1]), None
+    except OSError as exc:
+        if port == 0 or getattr(exc, "errno", None) != errno.EADDRINUSE:
+            raise
+    server = RealtimeHTTPServer((host, 0), handler_class, app_state)
+    actual_port = int(server.server_address[1])
+    return server, actual_port, f"Port {port} was already in use. Switched to {actual_port} automatically."
 
 
 def _guess_content_type(path: Path) -> str:
@@ -1365,9 +1538,9 @@ def _make_handler(static_dir: Path) -> type[BaseHTTPRequestHandler]:
 def run_web_interface(settings: Settings, host: str, port: int, open_browser: bool) -> int:
     app_state = WebAppState(settings)
     handler_class = _make_handler(STATIC_DIR)
-    server = RealtimeHTTPServer((host, port), handler_class, app_state)
+    server, actual_port, port_notice = _bind_web_server(host, port, handler_class, app_state)
     browser_host = "127.0.0.1" if host == "0.0.0.0" else host
-    url = f"http://{browser_host}:{port}"
+    url = f"http://{browser_host}:{actual_port}"
     strategy = _resolve_asr_strategy(settings)
     print(
         "Realtime Meeting Translator Web UI\n"
@@ -1379,6 +1552,8 @@ def run_web_interface(settings: Settings, host: str, port: int, open_browser: bo
         "Use the browser controls to start or stop listening.\n"
         "Press Q, S, X, or Esc in this terminal to stop the local server.\n"
     )
+    if port_notice:
+        print(f"- Notice: {port_notice}\n")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
 
@@ -1644,7 +1819,7 @@ def _render_cli_control_panel(settings: "Settings", selected_index: int, footer:
 
     rows = [
         ("Direction", direction_value, "Common translation direction"),
-        ("Mic", mic_label, "Active audio input"),
+        ("Input", mic_label, "Active audio capture source"),
     ]
 
     _clear_cli_screen()
@@ -1675,7 +1850,7 @@ def _render_cli_control_panel(settings: "Settings", selected_index: int, footer:
 
 def _run_cli_control_panel(settings: "Settings") -> str:
     selected_index = 0
-    footer = "Ready. Tune direction or microphone before launch."
+    footer = "Ready. Tune direction or audio input before launch."
     direction_options = [
         (source, target)
         for source, _ in CLI_SOURCE_LANGUAGE_OPTIONS
@@ -1710,7 +1885,7 @@ def _run_cli_control_panel(settings: "Settings") -> str:
                 option_values = [value for value, _ in device_options]
                 settings.input_device = _cycle_value(option_values, settings.input_device or "auto", step)
                 selected_label = next((label for value, label in device_options if value == settings.input_device), settings.input_device)
-                footer = f"Microphone set to {selected_label}."
+                footer = f"Audio input set to {selected_label}."
             continue
         if key == "enter":
             _clear_cli_screen()
