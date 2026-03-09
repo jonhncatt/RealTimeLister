@@ -120,6 +120,33 @@ def _normalize_base_url(raw_url: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, path.rstrip("/"), parsed.params, parsed.query, parsed.fragment))
 
 
+def _normalize_multiline_text(raw: str) -> str:
+    return str(raw or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _multiline_terms(raw: str) -> list[str]:
+    seen: set[str] = set()
+    terms: list[str] = []
+    for line in _normalize_multiline_text(raw).splitlines():
+        term = line.strip()
+        if not term or term in seen:
+            continue
+        seen.add(term)
+        terms.append(term)
+    return terms
+
+
+def _term_line_count(raw: str) -> int:
+    return len(_multiline_terms(raw))
+
+
+def _asr_hotwords_prompt(raw: str) -> str | None:
+    terms = _multiline_terms(raw)
+    if not terms:
+        return None
+    return ", ".join(terms)
+
+
 def _truthy(raw: str) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
@@ -259,6 +286,7 @@ class Settings:
     speaker_split_enabled: bool
     speaker_max_speakers: int
     speaker_match_threshold: float
+    asr_hotwords: str
     glossary: str
     hf_endpoint: str | None
     hf_token: str | None
@@ -302,7 +330,8 @@ class Settings:
             speaker_split_enabled=_truthy(_env("RT_SPEAKER_SPLIT_ENABLED", default="true")),
             speaker_max_speakers=max(1, min(8, int(_env("RT_SPEAKER_MAX", default="4")))),
             speaker_match_threshold=max(0.02, min(1.0, float(_env("RT_SPEAKER_MATCH_THRESHOLD", default="0.12")))),
-            glossary=_env("RT_GLOSSARY", default=""),
+            asr_hotwords=_normalize_multiline_text(_env("RT_ASR_HOTWORDS", default="")),
+            glossary=_normalize_multiline_text(_env("RT_GLOSSARY", default="")),
             hf_endpoint=_env("RT_ASR_HF_ENDPOINT", "RT_HF_ENDPOINT", "HF_ENDPOINT") or None,
             hf_token=_env("RT_ASR_HF_TOKEN", "RT_HF_TOKEN", "HF_TOKEN") or None,
         )
@@ -795,6 +824,7 @@ class RealtimeMeetingTranslator:
         pcm = np.frombuffer(pcm16le, dtype=np.int16).astype(np.float32) / 32768.0
         configured_source = _normalize_source_language(self.settings.source_language)
         language_hint = None if configured_source == "auto" else configured_source
+        hotwords = _asr_hotwords_prompt(self.settings.asr_hotwords)
         segments, info = self.model.transcribe(
             pcm,
             language=language_hint,
@@ -802,6 +832,7 @@ class RealtimeMeetingTranslator:
             vad_filter=False,
             word_timestamps=False,
             condition_on_previous_text=True,
+            hotwords=hotwords,
         )
         text = " ".join(seg.text.strip() for seg in segments if seg.text.strip()).strip()
         detected = _normalize_source_language(getattr(info, "language", "") or "", default="")
@@ -995,8 +1026,10 @@ class WebAppState:
                 "translationPromptTemplate": self.settings.translation_prompt_template,
                 "defaultTranslationPromptTemplate": DEFAULT_TRANSLATION_PROMPT_TEMPLATE,
                 "translationPromptPlaceholders": list(TRANSLATION_PROMPT_PLACEHOLDERS),
+                "asrHotwords": self.settings.asr_hotwords,
+                "asrHotwordsLineCount": _term_line_count(self.settings.asr_hotwords),
                 "glossary": self.settings.glossary,
-                "glossaryLineCount": _glossary_line_count(self.settings.glossary),
+                "glossaryLineCount": _term_line_count(self.settings.glossary),
                 "translatorEnabled": bool(self.settings.api_key),
                 "asrModelSource": asr_source,
                 "asrResolutionMode": "directory" if self.settings.asr_model_path else "model_name",
@@ -1154,11 +1187,21 @@ class WebAppState:
         return True, "Translation prompt template updated."
 
     def set_glossary(self, value: str) -> tuple[bool, str]:
-        normalized = (value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-        line_count = _glossary_line_count(normalized)
+        normalized = _normalize_multiline_text(value)
+        line_count = _term_line_count(normalized)
         with self._lock:
             self.settings.glossary = normalized
             self._last_info = f"Glossary updated ({line_count} lines)." if line_count else "Glossary cleared."
+        self._publish({"type": "info", "message": self._last_info, "timestamp": time.strftime("%H:%M:%S")})
+        self._publish_snapshot()
+        return True, self._last_info
+
+    def set_asr_hotwords(self, value: str) -> tuple[bool, str]:
+        normalized = _normalize_multiline_text(value)
+        line_count = _term_line_count(normalized)
+        with self._lock:
+            self.settings.asr_hotwords = normalized
+            self._last_info = f"ASR hotwords updated ({line_count} lines)." if line_count else "ASR hotwords cleared."
         self._publish({"type": "info", "message": self._last_info, "timestamp": time.strftime("%H:%M:%S")})
         self._publish_snapshot()
         return True, self._last_info
@@ -1243,6 +1286,11 @@ def _make_handler(static_dir: Path) -> type[BaseHTTPRequestHandler]:
             if path == "/api/glossary":
                 payload = self._read_json()
                 ok, message = self.server.app_state.set_glossary(str(payload.get("glossary") or ""))
+                self._send_json({"ok": ok, "message": message}, status=HTTPStatus.OK if ok else HTTPStatus.BAD_REQUEST)
+                return
+            if path == "/api/asr-hotwords":
+                payload = self._read_json()
+                ok, message = self.server.app_state.set_asr_hotwords(str(payload.get("hotwords") or ""))
                 self._send_json({"ok": ok, "message": message}, status=HTTPStatus.OK if ok else HTTPStatus.BAD_REQUEST)
                 return
             if path == "/api/languages":
@@ -1475,7 +1523,7 @@ def _truncate_cli_text(text: str, width: int) -> str:
 
 
 def _glossary_line_count(raw: str) -> int:
-    return len([line for line in (raw or "").splitlines() if line.strip()])
+    return _term_line_count(raw)
 
 
 def _clear_cli_screen() -> None:

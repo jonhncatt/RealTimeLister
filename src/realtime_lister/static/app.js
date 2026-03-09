@@ -22,13 +22,16 @@ const els = {
   targetLanguageSelect: document.getElementById("target-language-select"),
   inputDeviceSelect: document.getElementById("input-device-select"),
   advancedPanel: document.getElementById("advanced-panel"),
+  asrHotwordsInput: document.getElementById("asr-hotwords-input"),
   translationPromptInput: document.getElementById("translation-prompt-input"),
   glossaryInput: document.getElementById("glossary-input"),
   asrSource: document.getElementById("asr-source"),
   asrBeam: document.getElementById("asr-beam"),
+  asrHotwordsState: document.getElementById("asr-hotwords-state"),
   direction: document.getElementById("direction"),
   audioInputState: document.getElementById("audio-input-state"),
   translatorState: document.getElementById("translator-state"),
+  glossaryState: document.getElementById("glossary-state"),
   speakerSplitState: document.getElementById("speaker-split-state"),
   modelStatusCard: document.getElementById("model-status-card"),
   modelStatusText: document.getElementById("model-status-text"),
@@ -38,6 +41,10 @@ const els = {
   stopBtn: document.getElementById("stop-btn"),
   savePromptBtn: document.getElementById("save-prompt-btn"),
   resetPromptBtn: document.getElementById("reset-prompt-btn"),
+  uploadAsrHotwordsBtn: document.getElementById("upload-asr-hotwords-btn"),
+  saveAsrHotwordsBtn: document.getElementById("save-asr-hotwords-btn"),
+  clearAsrHotwordsBtn: document.getElementById("clear-asr-hotwords-btn"),
+  asrHotwordsFileInput: document.getElementById("asr-hotwords-file-input"),
   uploadGlossaryBtn: document.getElementById("upload-glossary-btn"),
   saveGlossaryBtn: document.getElementById("save-glossary-btn"),
   clearGlossaryBtn: document.getElementById("clear-glossary-btn"),
@@ -48,10 +55,13 @@ const els = {
 let currentState = null;
 let promptFocused = false;
 let promptDirty = false;
+let asrHotwordsFocused = false;
+let asrHotwordsDirty = false;
 let glossaryFocused = false;
 let glossaryDirty = false;
 els.savePromptBtn.disabled = true;
 els.resetPromptBtn.disabled = true;
+els.saveAsrHotwordsBtn.disabled = true;
 els.saveGlossaryBtn.disabled = true;
 
 const LANGUAGE_OPTIONS = [
@@ -77,7 +87,7 @@ function normalizeMultilineText(text) {
   return String(text || "").replace(/\r\n?/g, "\n").trim();
 }
 
-function glossaryLineCount(text) {
+function termLineCount(text) {
   return normalizeMultilineText(text)
     .split("\n")
     .filter((line) => line.trim()).length;
@@ -206,9 +216,14 @@ function renderGuide(state, noInputs) {
   const shortAsrSource = String(state.asrModelSource || "-").split(/[\\/]/).pop();
   const sourcePlan = languageDisplay(state.sourceLanguage);
   const targetPlan = languageDisplay(state.targetLanguage);
+  const asrHotwordsPlan = state.asrHotwordsLineCount
+    ? ` · ${state.asrHotwordsLineCount} ASR hint${state.asrHotwordsLineCount === 1 ? "" : "s"}`
+    : "";
   const translatorPlan = state.translatorEnabled ? state.translationModel : "Mirror only";
-  const glossaryPlan = state.glossaryLineCount ? ` · ${state.glossaryLineCount} term` : "";
-  els.runPlanText.textContent = `${sourcePlan} -> ${targetPlan} · ${shortAsrSource} · ${state.selectedInputDeviceLabel} · ${translatorPlan}${glossaryPlan}`;
+  const glossaryPlan = state.glossaryLineCount
+    ? ` · ${state.glossaryLineCount} term${state.glossaryLineCount === 1 ? "" : "s"}`
+    : "";
+  els.runPlanText.textContent = `${sourcePlan} -> ${targetPlan} · ${shortAsrSource} · ${state.selectedInputDeviceLabel}${asrHotwordsPlan} · ${translatorPlan}${glossaryPlan}`;
 
   if (state.running) {
     els.nextStepText.textContent = "Session is live. Speak near the microphone.";
@@ -260,10 +275,12 @@ function applyState(state) {
   els.asrMode.textContent = `ASR :: ${state.asrStrategyName || "Unknown Strategy"}`;
   els.asrSource.textContent = state.asrModelSource;
   els.asrBeam.textContent = String(state.asrBeamSize);
+  els.asrHotwordsState.textContent = state.asrHotwordsLineCount ? `${state.asrHotwordsLineCount} loaded` : "None";
   const currentSourceLanguage = current?.source_language || state.sourceLanguage;
   els.direction.textContent = `${currentSourceLanguage} → ${state.targetLanguage}`;
   els.audioInputState.textContent = state.selectedInputDeviceLabel || state.selectedInputDevice;
   els.translatorState.textContent = state.translatorEnabled ? state.translationModel : "ASR only";
+  els.glossaryState.textContent = state.glossaryLineCount ? `${state.glossaryLineCount} loaded` : "None";
   els.speakerSplitState.textContent = state.speakerSplitEnabled
     ? `On (max ${state.speakerMaxSpeakers})`
     : "Off";
@@ -310,9 +327,15 @@ function applyState(state) {
   els.inputDeviceSelect.disabled = state.running || state.loading || noInputs;
   els.translationPromptInput.disabled = state.running || state.loading;
   els.resetPromptBtn.disabled = state.running || state.loading;
+  els.asrHotwordsInput.disabled = false;
+  els.uploadAsrHotwordsBtn.disabled = false;
+  els.clearAsrHotwordsBtn.disabled = false;
   els.glossaryInput.disabled = false;
   els.uploadGlossaryBtn.disabled = false;
   els.clearGlossaryBtn.disabled = false;
+  if (!asrHotwordsFocused && !asrHotwordsDirty) {
+    els.asrHotwordsInput.value = state.asrHotwords || "";
+  }
   if (!promptFocused && !promptDirty) {
     els.translationPromptInput.value = state.translationPromptTemplate || "";
   }
@@ -320,6 +343,7 @@ function applyState(state) {
     els.glossaryInput.value = state.glossary || "";
   }
   els.savePromptBtn.disabled = state.running || state.loading || !promptDirty;
+  els.saveAsrHotwordsBtn.disabled = !asrHotwordsDirty;
   els.saveGlossaryBtn.disabled = !glossaryDirty;
 
   renderLanguageOptions(els.sourceLanguageSelect, state.sourceLanguage, { allowAuto: true });
@@ -423,6 +447,24 @@ function bindControls() {
   els.sourceLanguageSelect.addEventListener("change", handleLanguageChange);
   els.targetLanguageSelect.addEventListener("change", handleLanguageChange);
 
+  els.asrHotwordsInput.addEventListener("focus", () => {
+    asrHotwordsFocused = true;
+    els.advancedPanel.open = true;
+  });
+  els.asrHotwordsInput.addEventListener("blur", () => {
+    asrHotwordsFocused = false;
+  });
+  els.asrHotwordsInput.addEventListener("input", () => {
+    if (!currentState) {
+      asrHotwordsDirty = true;
+      els.saveAsrHotwordsBtn.disabled = false;
+      return;
+    }
+    asrHotwordsDirty =
+      normalizeMultilineText(els.asrHotwordsInput.value) !== normalizeMultilineText(currentState.asrHotwords || "");
+    els.saveAsrHotwordsBtn.disabled = !asrHotwordsDirty;
+  });
+
   els.translationPromptInput.addEventListener("focus", () => {
     promptFocused = true;
     els.advancedPanel.open = true;
@@ -480,6 +522,55 @@ function bindControls() {
     }
   });
 
+  els.uploadAsrHotwordsBtn.addEventListener("click", () => {
+    els.asrHotwordsFileInput.click();
+  });
+
+  els.asrHotwordsFileInput.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    try {
+      const hotwords = normalizeMultilineText(await file.text());
+      await postJson("/api/asr-hotwords", { hotwords });
+      asrHotwordsDirty = false;
+      els.saveAsrHotwordsBtn.disabled = true;
+      els.asrHotwordsInput.value = hotwords;
+      els.controlNote.textContent = `${file.name} imported to ASR hotwords (${termLineCount(hotwords)} lines).`;
+    } catch (error) {
+      els.controlNote.textContent = error.message;
+    } finally {
+      event.target.value = "";
+    }
+  });
+
+  els.saveAsrHotwordsBtn.addEventListener("click", async () => {
+    try {
+      const hotwords = normalizeMultilineText(els.asrHotwordsInput.value);
+      await postJson("/api/asr-hotwords", { hotwords });
+      asrHotwordsDirty = false;
+      els.saveAsrHotwordsBtn.disabled = true;
+      els.controlNote.textContent = hotwords
+        ? `ASR hotwords saved (${termLineCount(hotwords)} lines).`
+        : "ASR hotwords cleared.";
+    } catch (error) {
+      els.controlNote.textContent = error.message;
+    }
+  });
+
+  els.clearAsrHotwordsBtn.addEventListener("click", async () => {
+    try {
+      await postJson("/api/asr-hotwords", { hotwords: "" });
+      asrHotwordsDirty = false;
+      els.saveAsrHotwordsBtn.disabled = true;
+      els.asrHotwordsInput.value = "";
+      els.controlNote.textContent = "ASR hotwords cleared.";
+    } catch (error) {
+      els.controlNote.textContent = error.message;
+    }
+  });
+
   els.uploadGlossaryBtn.addEventListener("click", () => {
     els.glossaryFileInput.click();
   });
@@ -495,7 +586,7 @@ function bindControls() {
       glossaryDirty = false;
       els.saveGlossaryBtn.disabled = true;
       els.glossaryInput.value = text;
-      els.controlNote.textContent = `${file.name} imported (${glossaryLineCount(text)} lines).`;
+      els.controlNote.textContent = `${file.name} imported (${termLineCount(text)} lines).`;
     } catch (error) {
       els.controlNote.textContent = error.message;
     } finally {
@@ -510,7 +601,7 @@ function bindControls() {
       glossaryDirty = false;
       els.saveGlossaryBtn.disabled = true;
       els.controlNote.textContent = glossary
-        ? `Glossary saved (${glossaryLineCount(glossary)} lines).`
+        ? `Glossary saved (${termLineCount(glossary)} lines).`
         : "Glossary cleared.";
     } catch (error) {
       els.controlNote.textContent = error.message;

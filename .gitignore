@@ -4,5 +4,7 @@ __pycache__/
 .env
 *.log
 .models/
-model/
+model/*
+!model/faster-whisper-small/
+!model/faster-whisper-small/**
 *.egg-info/

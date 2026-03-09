@@ -106,6 +106,19 @@
               <details class="advanced-panel" id="advanced-panel">
                 <summary>Prompt Console</summary>
                 <label class="select-block">
+                  <span class="select-label">ASR Hotwords</span>
+                  <textarea id="asr-hotwords-input" class="prompt-input glossary-input" rows="5" placeholder="One term per line. Prefer the final canonical form. Example:&#10;CM10&#10;Kintone&#10;Backlog"></textarea>
+                </label>
+                <p class="control-hint">
+                  这部分喂给 Whisper / faster-whisper，用来提高项目代号、产品名、日式英语的命中率。它不是强制替换；像 `シーえむてん -> CM10` 这种规范化，最好再放到下面的 GPT glossary 里兜底。
+                </p>
+                <div class="button-row advanced-actions">
+                  <button id="upload-asr-hotwords-btn" class="btn muted">Upload ASR Terms</button>
+                  <button id="save-asr-hotwords-btn" class="btn primary">Save ASR Hotwords</button>
+                  <button id="clear-asr-hotwords-btn" class="btn ghost">Clear ASR Hotwords</button>
+                </div>
+                <input id="asr-hotwords-file-input" type="file" accept=".txt,.md,.csv,.tsv,.json" hidden />
+                <label class="select-block">
                   <span class="select-label">Translation Prompt</span>
                   <textarea id="translation-prompt-input" class="prompt-input" rows="5"></textarea>
                 </label>
@@ -121,7 +134,7 @@
                   <textarea id="glossary-input" class="prompt-input glossary-input" rows="6" placeholder="One term per line. Example:&#10;CRM=Customer Relationship Management&#10;老约翰=Old John"></textarea>
                 </label>
                 <p class="control-hint">
-                  这部分只会喂给翻译模型，不会让 Whisper 识别更准。可上传 `.txt`、`.md`、`.csv` 之类的文本文件。
+                  这部分只会喂给 GPT 翻译模型，不会直接改变 Whisper 的识别结果。适合放固定译法、术语映射和 `シーえむてん -> CM10` 这类规范写法。可上传 `.txt`、`.md`、`.csv` 之类的文本文件。
                 </p>
                 <div class="button-row advanced-actions">
                   <button id="upload-glossary-btn" class="btn muted">Upload Terms</button>
@@ -145,6 +158,10 @@
                   <dd id="asr-beam">-</dd>
                 </div>
                 <div>
+                  <dt>ASR Hints</dt>
+                  <dd id="asr-hotwords-state">-</dd>
+                </div>
+                <div>
                   <dt>Direction</dt>
                   <dd id="direction">-</dd>
                 </div>
@@ -155,6 +172,10 @@
                 <div>
                   <dt>Translator</dt>
                   <dd id="translator-state">-</dd>
+                </div>
+                <div>
+                  <dt>Glossary</dt>
+                  <dd id="glossary-state">-</dd>
                 </div>
                 <div>
                   <dt>Speaker Split</dt>
