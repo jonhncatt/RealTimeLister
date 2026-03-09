@@ -1,11 +1,19 @@
 const els = {
   statusPill: document.getElementById("status-pill"),
+  enginePanel: document.getElementById("engine-panel"),
+  engineState: document.getElementById("engine-state"),
+  engineDetail: document.getElementById("engine-detail"),
+  sessionPanel: document.getElementById("session-panel"),
+  sessionState: document.getElementById("session-state"),
+  sessionDetail: document.getElementById("session-detail"),
   latencyChip: document.getElementById("latency-chip"),
   sourceLabel: document.getElementById("source-label"),
   sourceText: document.getElementById("source-text"),
   targetLabel: document.getElementById("target-label"),
   targetText: document.getElementById("target-text"),
   asrMode: document.getElementById("asr-mode"),
+  engineChip: document.getElementById("engine-chip"),
+  sessionChip: document.getElementById("session-chip"),
   nextStepText: document.getElementById("next-step-text"),
   runPlanText: document.getElementById("run-plan-text"),
   modelCheckCard: document.getElementById("model-check-card"),
@@ -28,10 +36,12 @@ const els = {
   asrSource: document.getElementById("asr-source"),
   asrBeam: document.getElementById("asr-beam"),
   asrHotwordsState: document.getElementById("asr-hotwords-state"),
+  asrRuntimeState: document.getElementById("asr-runtime-state"),
   direction: document.getElementById("direction"),
   audioInputState: document.getElementById("audio-input-state"),
   translatorState: document.getElementById("translator-state"),
   glossaryState: document.getElementById("glossary-state"),
+  lastActivityState: document.getElementById("last-activity-state"),
   speakerSplitState: document.getElementById("speaker-split-state"),
   modelStatusCard: document.getElementById("model-status-card"),
   modelStatusText: document.getElementById("model-status-text"),
@@ -185,6 +195,79 @@ function setupToneClass(tone) {
   return `setup-tone-${tone || "warn"}`;
 }
 
+function describeEngineState(state) {
+  if (state.loading) {
+    return {
+      chip: "Model Load",
+      value: "Loading Model",
+      detail: "ASR engine is being loaded into memory and the microphone is being armed.",
+      tone: "loading",
+    };
+  }
+  if (state.asrModelStatusLevel === "error") {
+    return {
+      chip: "Model Error",
+      value: "Model Missing",
+      detail: state.asrModelStatusMessage,
+      tone: "error",
+    };
+  }
+  if (state.asrModelStatusLevel === "ready") {
+    return {
+      chip: "Model Ready",
+      value: state.running ? "Loaded + Live" : "Loaded + Standby",
+      detail: state.asrModelStatusMessage,
+      tone: state.running ? "running" : "ok",
+    };
+  }
+  return {
+    chip: "Model Check",
+    value: "Checking Model",
+    detail: state.asrModelStatusMessage || "Inspecting model configuration.",
+    tone: "loading",
+  };
+}
+
+function describeSessionState(state) {
+  const last = state.current || state.history[state.history.length - 1] || null;
+  if (state.loading) {
+    return {
+      chip: "Arming",
+      value: "Preparing Session",
+      detail: "Opening the selected audio input and warming up the ASR pipeline.",
+      tone: "loading",
+      metric: "Preparing",
+    };
+  }
+  if (state.running) {
+    return {
+      chip: "Session Live",
+      value: "Listening",
+      detail: last
+        ? `Live capture is active. Last segment at ${last.timestamp} from ${last.speaker_label || "current speaker"}.`
+        : "Live capture is active. Waiting for speech to cross the VAD threshold.",
+      tone: "running",
+      metric: last ? `Live · last ${last.timestamp}` : "Live",
+    };
+  }
+  if (last) {
+    return {
+      chip: "Standby",
+      value: "Idle with History",
+      detail: `Last segment at ${last.timestamp} from ${last.speaker_label || "speaker"}. Session is stopped right now.`,
+      tone: "idle",
+      metric: `Standby · ${state.history.length} seg`,
+    };
+  }
+  return {
+    chip: "Session Idle",
+    value: "Idle",
+    detail: "No active capture. Start the session to load the microphone feed into the ASR engine.",
+    tone: "idle",
+    metric: "Idle",
+  };
+}
+
 function languageDisplay(value) {
   if (!value || value === "auto") {
     return "Auto Detect";
@@ -268,19 +351,38 @@ function applyState(state) {
   document.body.dataset.translator = state.translatorEnabled ? "on" : "off";
   document.body.dataset.session = state.running ? "running" : state.loading ? "loading" : "idle";
   const current = state.current;
+  const last = current || state.history[state.history.length - 1] || null;
   const noInputs = Boolean(state.inputDevicesError) || state.inputDevices.length === 0;
+  const engineStatus = describeEngineState(state);
+  const sessionStatus = describeSessionState(state);
   els.statusPill.textContent = state.statusMessage;
   els.statusPill.className = `status-pill ${statusClass(state.statusLevel)}`;
-  els.latencyChip.textContent = current ? `${current.translate_ms} ms` : "Waiting";
+  els.engineChip.textContent = engineStatus.chip;
+  els.engineChip.className = statusClass(engineStatus.tone);
+  els.sessionChip.textContent = sessionStatus.chip;
+  els.sessionChip.className = statusClass(sessionStatus.tone);
+  els.enginePanel.className = `runtime-row ${statusClass(engineStatus.tone)}`;
+  els.engineState.textContent = engineStatus.value;
+  els.engineDetail.textContent = engineStatus.detail;
+  els.sessionPanel.className = `runtime-row ${statusClass(sessionStatus.tone)}`;
+  els.sessionState.textContent = sessionStatus.value;
+  els.sessionDetail.textContent = sessionStatus.detail;
+  els.latencyChip.textContent = current ? `${current.translate_ms} ms` : state.running ? "Mic Hot" : "Waiting";
   els.asrMode.textContent = `ASR :: ${state.asrStrategyName || "Unknown Strategy"}`;
   els.asrSource.textContent = state.asrModelSource;
   els.asrBeam.textContent = String(state.asrBeamSize);
   els.asrHotwordsState.textContent = state.asrHotwordsLineCount ? `${state.asrHotwordsLineCount} loaded` : "None";
+  els.asrRuntimeState.textContent = sessionStatus.metric;
   const currentSourceLanguage = current?.source_language || state.sourceLanguage;
   els.direction.textContent = `${currentSourceLanguage} → ${state.targetLanguage}`;
   els.audioInputState.textContent = state.selectedInputDeviceLabel || state.selectedInputDevice;
   els.translatorState.textContent = state.translatorEnabled ? state.translationModel : "ASR only";
   els.glossaryState.textContent = state.glossaryLineCount ? `${state.glossaryLineCount} loaded` : "None";
+  els.lastActivityState.textContent = last
+    ? `${last.timestamp} · ${last.speaker_label || "speaker"}`
+    : state.running
+      ? "Live · waiting for speech"
+      : "No activity yet";
   els.speakerSplitState.textContent = state.speakerSplitEnabled
     ? `On (max ${state.speakerMaxSpeakers})`
     : "Off";

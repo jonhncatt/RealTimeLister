@@ -27,6 +27,18 @@
             <span class="status-meta">single operator view</span>
             <span class="status-meta">local speech pipeline</span>
           </div>
+          <div class="runtime-ledger">
+            <article class="runtime-row status-idle" id="engine-panel">
+              <p class="runtime-row-label">ASR Engine</p>
+              <p class="runtime-row-value" id="engine-state">Checking...</p>
+              <p class="runtime-row-detail" id="engine-detail">Model state will appear here.</p>
+            </article>
+            <article class="runtime-row status-idle" id="session-panel">
+              <p class="runtime-row-label">Session Runtime</p>
+              <p class="runtime-row-value" id="session-state">Idle</p>
+              <p class="runtime-row-detail" id="session-detail">Waiting for session start.</p>
+            </article>
+          </div>
         </div>
       </header>
 
@@ -37,6 +49,8 @@
               <span class="console-tag">Live Feed</span>
               <div class="topline-badges">
                 <span id="asr-mode">ASR</span>
+                <span id="engine-chip">Model Check</span>
+                <span id="session-chip">Session Idle</span>
                 <span id="latency-chip">Waiting</span>
               </div>
             </div>
@@ -162,6 +176,10 @@
                   <dd id="asr-hotwords-state">-</dd>
                 </div>
                 <div>
+                  <dt>ASR Runtime</dt>
+                  <dd id="asr-runtime-state">-</dd>
+                </div>
+                <div>
                   <dt>Direction</dt>
                   <dd id="direction">-</dd>
                 </div>
@@ -176,6 +194,10 @@
                 <div>
                   <dt>Glossary</dt>
                   <dd id="glossary-state">-</dd>
+                </div>
+                <div>
+                  <dt>Last Activity</dt>
+                  <dd id="last-activity-state">-</dd>
                 </div>
                 <div>
                   <dt>Speaker Split</dt>

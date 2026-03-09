@@ -135,6 +135,8 @@ h1 {
 .rack-chip,
 .console-tag,
 #asr-mode,
+#engine-chip,
+#session-chip,
 #latency-chip,
 .history-count,
 .status-meta {
@@ -155,6 +157,8 @@ h1 {
 .rack-chip,
 .console-tag,
 #asr-mode,
+#engine-chip,
+#session-chip,
 #latency-chip,
 .history-count {
   clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
@@ -164,6 +168,49 @@ h1 {
   display: grid;
   justify-items: end;
   gap: 12px;
+}
+
+.runtime-ledger {
+  display: grid;
+  gap: 10px;
+  width: min(100%, 360px);
+}
+
+.runtime-row {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(135deg, rgba(255, 90, 45, 0.06), transparent 55%),
+    rgba(255, 255, 255, 0.03);
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+}
+
+.runtime-row-label,
+.runtime-row-value,
+.runtime-row-detail {
+  margin: 0;
+}
+
+.runtime-row-label {
+  color: var(--muted);
+  font-size: 0.73rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.runtime-row-value {
+  margin-top: 7px;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.runtime-row-detail {
+  margin-top: 7px;
+  color: rgba(246, 217, 202, 0.74);
+  line-height: 1.45;
+  font-size: 0.84rem;
 }
 
 .status-pill {
@@ -649,6 +696,35 @@ h1 {
 }
 
 .status-error {
+  color: var(--danger);
+}
+
+.runtime-row.status-ok,
+.runtime-row.status-running {
+  border-color: rgba(47, 191, 113, 0.3);
+  box-shadow: inset 0 0 0 1px rgba(47, 191, 113, 0.08);
+}
+
+.runtime-row.status-loading {
+  border-color: rgba(255, 176, 32, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(255, 176, 32, 0.08);
+}
+
+.runtime-row.status-error {
+  border-color: rgba(226, 61, 45, 0.34);
+  box-shadow: inset 0 0 0 1px rgba(226, 61, 45, 0.08);
+}
+
+.runtime-row.status-ok .runtime-row-value,
+.runtime-row.status-running .runtime-row-value {
+  color: var(--ok);
+}
+
+.runtime-row.status-loading .runtime-row-value {
+  color: var(--warn);
+}
+
+.runtime-row.status-error .runtime-row-value {
   color: var(--danger);
 }
 
